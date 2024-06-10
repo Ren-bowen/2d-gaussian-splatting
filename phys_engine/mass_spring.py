@@ -1,6 +1,9 @@
 import numpy as np
 from scipy.optimize import fsolve
 import sympy as sp
+from phys_engine import time_integrator
+import cupy as cp
+import time
 
 def magnitude_squared(v):
     return np.dot(v, v)
@@ -248,24 +251,39 @@ def set_spring(covariance):
     initial_length = []
     stiffness = []
     for i in range(len(covariance)):
-        for j in range(i + 1, len(covariance)):
-            dens = np.linalg.norm(covariance[i][3][:3] - covariance[j][3][:3])
-            if (j != i and dens < 0.05):
-                print("dens: ", dens)
+        dens = []
+        for j in range(len(covariance)):
+            dens.append(np.linalg.norm(covariance[i][3][:3] - covariance[j][3][:3]))
+        dens = np.array(dens)
+        dens = sorted(dens)
+        for j in range(len(covariance)):
+            den = np.linalg.norm(covariance[i][3][:3] - covariance[j][3][:3])
+            if (j != i and den < dens[10]):
+                # print("dens: ", dens)
                 elements.append([i, j])
-                initial_length.append([dens])
-                stiffness.append(1e7)
+                initial_length.append(den)
+                stiffness.append(1e5)
                 # print("i: ", i, "j: ", j, "overlap: ", dens)
+
     print("len(elements): ", len(elements))
+    np.save("/home/renbowen/elements.npy", elements)
+    np.save("/home/renbowen/initial_length.npy", initial_length)
     return elements, initial_length, stiffness
 
 def simulation(x, covariance):
+    # reference: https://github.com/phys-sim-book/solid-sim-tutorial/tree/main/1_mass_spring
     x_history = []
+    covariance_history = []
     x = x.detach().cpu().numpy().copy()
     x0 = x
     covariance = covariance.detach().cpu().numpy().copy()
     print("covariance.shape: ", covariance.shape)
-    elements, initial_length, stiffness = set_spring(covariance)
+    start_time = time.time()
+    # elements, initial_length, stiffness = set_spring(covariance)
+    elements = np.load("/home/renbowen/elements.npy")
+    initial_length = np.load("/home/renbowen/initial_length.npy")
+    stiffness = [1e5] * len(elements)
+    print("set_spring time: ", time.time() - start_time)
     #elements = np.load("elements.npy")
     #initial_length = np.load("initial_length.npy")
     #stiffness = np.load("stiffness.npy")
@@ -274,17 +292,21 @@ def simulation(x, covariance):
     #np.save("stiffness.npy", stiffness)
     # hyperparameters
     rho = 1e2  # mass density
-    h = 0.05   # time step
-    frame_num = 5
+    h = 0.01  # time step
+    frame_num = 200
     velocity = np.zeros((len(x), 3))
+    rhos = []
+    for i in range(len(x)):
+        rhos.append(rho * np.linalg.norm(covariance[i][0][:3]) * np.linalg.norm(covariance[i][1][:3]))
     for i in range(frame_num):
         num = 0
         for j in range(len(x)):
             if (x0[j][2] < 2.7 and x0[j][2] > 2.3 and x0[j][0] > -0.6 and x0[j][0] < -0.3):
-                x[j][1] -= 0.09
+                x[j][1] -= 0.01
                 num += 1
-        print("num: ", num)
-        # calculate forces
+        print("num_set_v: ", num)
+        # explicit: calculate forces
+        '''
         f = np.zeros((len(x), 3))
         for j in range(len(elements)):
             m, n = elements[j]
@@ -300,7 +322,39 @@ def simulation(x, covariance):
         # update velocity and position
         velocity = velocity + a * h
         x = x + velocity * h
+        '''
+        [x_next, v] = time_integrator.step_forward(x, elements, velocity, [rho] * len(x), [length ** 2 for length in initial_length], stiffness, h, 1e-2)
         x_history.append(x)
+        # shape matching
+        start_time = time.time()
+    for i in range(len(x)):
+        connected_xs = []
+        next_connected_xs = []
+        for e in range(len(elements)):
+            if elements[e][0] == i:
+                connected_xs.append(x[elements[e][1]])
+                next_connected_xs.append(x_next[elements[e][1]])
+            elif elements[e][1] == i:
+                connected_xs.append(x[elements[e][0]])
+                next_connected_xs.append(x_next[elements[e][0]])
+
+        connected_xs = np.array(connected_xs)
+        next_connected_xs = np.array(next_connected_xs)
+        center = connected_xs.mean(axis=0)
+        next_center = next_connected_xs.mean(axis=0)
+        connected_xs -= center
+        next_connected_xs -= next_center
+
+        H = np.dot(connected_xs.T, next_connected_xs)
+        H_gpu = cp.asarray(H)
+        U, S, V = cp.linalg.svd(H_gpu)
+        R = cp.dot(U, V).get()  # .get() retrieves the result from GPU to CPU
+
+        covariance[i][:3][:3] = R @ covariance[i][:3][:3]
+        print("shape maching time: ", time.time() - start_time)
+        covariance_history.append(covariance)
+        x = x_next
+    np.save("/home/renbowen/x_history.npy", x_history)
     return x_history
 
             

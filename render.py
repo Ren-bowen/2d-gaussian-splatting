@@ -94,7 +94,8 @@ if __name__ == "__main__":
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
-    for i in range(len(x_history)):
+    for i in range(0, 200, 40):
+    #   for i in range(0, len(x_history), 10):
         print("i: ", i)
         cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
 
@@ -128,28 +129,28 @@ if __name__ == "__main__":
                         input_dir=traj_dir, 
                         out_name='render_traj', 
                         num_frames=n_fames)
-    '''
-    if not args.skip_mesh:
-        print("export mesh ...")
-        os.makedirs(train_dir, exist_ok=True)
-        # set the active_sh to 0 to export only diffuse texture
-        gaussExtractor.gaussians.active_sh_degree = 0
-        gaussExtractor.reconstruction(scene.getTrainCameras())
-        # extract the mesh and save
-        if args.unbounded:
-            name = 'fuse_unbounded.ply'
-            mesh = gaussExtractor.extract_mesh_unbounded(resolution=args.mesh_res)
-        else:
-            name = 'fuse.ply'
-            depth_trunc = (gaussExtractor.radius * 2.0) if args.depth_trunc < 0  else args.depth_trunc
-            voxel_size = (depth_trunc / args.mesh_res) if args.voxel_size < 0 else args.voxel_size
-            sdf_trunc = 5.0 * voxel_size if args.sdf_trunc < 0 else args.sdf_trunc
-            mesh = gaussExtractor.extract_mesh_bounded(voxel_size=voxel_size, sdf_trunc=sdf_trunc, depth_trunc=depth_trunc)
-        
-        o3d.io.write_triangle_mesh(os.path.join(train_dir, name), mesh)
-        print("mesh saved at {}".format(os.path.join(train_dir, name)))
-        # post-process the mesh and save, saving the largest N clusters
-        mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
-        o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
-        print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
-    '''
+    
+        if not args.skip_mesh:
+            print("export mesh ...")
+            os.makedirs(train_dir, exist_ok=True)
+            # set the active_sh to 0 to export only diffuse texture
+            gaussExtractor.gaussians.active_sh_degree = 0
+            gaussExtractor.reconstruction(scene.getTrainCameras())
+            # extract the mesh and save
+            if args.unbounded:
+                name = 'fuse_unbounded.ply'
+                mesh = gaussExtractor.extract_mesh_unbounded(resolution=args.mesh_res)
+            else:
+                name = 'fuse.ply'
+                depth_trunc = (gaussExtractor.radius * 2.0) if args.depth_trunc < 0  else args.depth_trunc
+                voxel_size = (depth_trunc / args.mesh_res) if args.voxel_size < 0 else args.voxel_size
+                sdf_trunc = 5.0 * voxel_size if args.sdf_trunc < 0 else args.sdf_trunc
+                mesh = gaussExtractor.extract_mesh_bounded(voxel_size=voxel_size, sdf_trunc=sdf_trunc, depth_trunc=depth_trunc)
+            
+            o3d.io.write_triangle_mesh(os.path.join(train_dir, name), mesh)
+            print("mesh saved at {}".format(os.path.join(train_dir, name)))
+            # post-process the mesh and save, saving the largest N clusters
+            mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
+            o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
+            print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
+    
