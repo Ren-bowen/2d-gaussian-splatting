@@ -1,0 +1,417 @@
+#include "simulator.h"
+#include <SFML/Graphics.hpp>
+#include "InertialEnergy.h"
+#include "MassSpringEnergy.h"
+#include <muda/muda.h>
+#include <muda/container.h>
+#include "uti.h"
+#include "device_uti.h"
+using namespace muda;
+template <typename T, int dim>
+struct MassSpringSimulator<T, dim>::Impl
+{
+    int n_seg;
+    T h, side_len, initial_stretch, tol;
+    std::vector<T> m;
+    std::vector<T> initial_length;
+    std::vector<T> covariance_;
+    std::vector<int> elements;
+    int resolution = 900, scale = 200, offset = resolution / 2, radius = 5;
+    std::vector<T> x, x_tilde, v, k, l2;
+    std::vector<int> e;
+    // sf::RenderWindow window;
+    InertialEnergy<T, dim> inertialenergy;
+    MassSpringEnergy<T, dim> massspringenergy;
+    Impl(std::vector<T> M, T side_len, T initial_stretch, std::vector<T> K, T h_, T tol_, int n_seg, std::vector<T> initial_length, std::vector<T> covariance, std::vector<int> elements);
+    void update_x(const DeviceBuffer<T> &new_x);
+    void update_x_tilde(const DeviceBuffer<T> &new_x_tilde);
+    void update_v(const DeviceBuffer<T> &new_v);
+    void update_covariance(const DeviceBuffer<T> &new_covariance);
+    void shape_matching(const DeviceBuffer<T> &x0);
+    T IP_val();
+    void step_forward();
+    //void draw();
+    DeviceBuffer<T> IP_grad();
+    DeviceTripletMatrix<T, 1> IP_hess();
+    DeviceBuffer<T> search_direction();
+    //T screen_projection_x(T point);
+    //T screen_projection_y(T point);
+};
+template <typename T, int dim>
+MassSpringSimulator<T, dim>::MassSpringSimulator() = default;
+
+template <typename T, int dim>
+MassSpringSimulator<T, dim>::~MassSpringSimulator() = default;
+
+template <typename T, int dim>
+MassSpringSimulator<T, dim>::MassSpringSimulator(MassSpringSimulator<T, dim> &&rhs) = default;
+
+template <typename T, int dim>
+MassSpringSimulator<T, dim> &MassSpringSimulator<T, dim>::operator=(MassSpringSimulator<T, dim> &&rhs) = default;
+
+template <typename T, int dim>
+MassSpringSimulator<T, dim>::MassSpringSimulator(std::vector<T> M, T side_len, T initial_stretch, std::vector<T> K, T h_, T tol_, int n_seg, std::vector<T> initial_length, std::vector<T> covariance, std::vector<int> elements) : pimpl_{std::make_unique<Impl>(M, side_len, initial_stretch, K, h_, tol_, n_seg, initial_length, covariance, elements)}
+{
+}
+template <typename T, int dim>
+MassSpringSimulator<T, dim>::Impl::Impl(std::vector<T> M, T side_len, T initial_stretch, std::vector<T> K, T h_, T tol_, int n_seg, std::vector<T> initial_length, std::vector<T> covariance, std::vector<int> elements) : tol(tol_), h(h_)
+{
+    int N = covariance.size() / ((dim + 1) * (dim + 1));
+    covariance_.resize(N * (dim + 1) * (dim + 1));
+    for (int i = 0; i < N * (dim + 1) * (dim + 1); i++)
+    {
+        covariance_[i] = covariance[i];
+    }
+    x.resize(N * dim);
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < dim; j++) {
+            x[i * dim + j] = covariance[i * 16 + 12 + j];
+        }
+    }
+    v.resize(x.size(), 0);
+    k.resize(K.size());
+    for (int i = 0; i < K.size(); i++)
+    {
+        k[i] = K[i];
+    }
+    e.resize(elements.size());
+    for (int i = 0; i < elements.size(); i++)
+    {
+        e[i] = elements[i];
+    }
+    l2.resize(e.size() / 2);
+    for (int i = 0; i < e.size() / 2; i++)
+    {
+        T diff = 0;
+        int idx1 = e[2 * i], idx2 = e[2 * i + 1];
+        for (int d = 0; d < dim; d++)
+        {
+            diff += (x[idx1 * dim + d] - x[idx2 * dim + d]) * (x[idx1 * dim + d] - x[idx2 * dim + d]);
+        }
+        l2[i] = diff;
+    }
+    m.resize(M.size());
+    for (int i = 0; i < M.size(); i++)
+    {
+        m[i] = M[i];
+    }
+    // initial stretch
+    for (int i = 0; i < N; i++) {
+        x[i * dim + 0] *= initial_stretch;
+        // std::cout<<"x: "<<x[i * dim + 0]<<std::endl;
+    }
+    inertialenergy = InertialEnergy<T, dim>(N, m);
+    massspringenergy = MassSpringEnergy<T, dim>(x, e, l2, k);
+    DeviceBuffer<T> x_device(x);
+    update_x(x_device);
+}
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::run()
+{
+    assert(dim == 3);
+    // bool running = true;
+    pimpl_->step_forward();
+    /*
+    auto &window = pimpl_->window;
+    while (running)
+    {
+        sf::Event event;
+        while (window.pollEvent(event))
+        {
+            if (event.type == sf::Event::Closed)
+                running = false;
+        }
+
+        pimpl_->draw(); // Draw the current state
+
+        // Update the simulation state
+        pimpl_->step_forward();
+
+        // Wait according to time step
+        // sf::sleep(sf::milliseconds(static_cast<int>(h * 1000)));
+    }
+
+    window.close();
+    */
+}
+
+template <typename T, int dim>
+std::vector<T> MassSpringSimulator<T, dim>::get_x()
+{
+    return pimpl_->x;
+}
+
+template <typename T, int dim>
+std::vector<T> MassSpringSimulator<T, dim>::get_v()
+{
+    return pimpl_->v;
+}
+
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::set_v(const std::vector<T> v_new)
+{
+    pimpl_->update_v(v_new);
+}
+
+template <typename T, int dim>
+std::vector<T> MassSpringSimulator<T, dim>::get_covariance()
+{
+    // Here covariance[:3][:3] is the rotation matrix computed by shape matching
+    return pimpl_->covariance_;
+}
+
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::step_forward()
+{
+    DeviceBuffer<T> x_tilde(x.size()); // Predictive position
+    // std::cout<<"h "<<h<<std::endl;
+    update_x_tilde(add_vector<T>(x, v, 1, h));
+    DeviceBuffer<T> x_n = x; // Copy current positions to x_n
+    std::cout <<"x.size() "<<x.size()<<std::endl;
+    int iter = 0;
+    T E_last = IP_val();
+    std::cout << "Initial E_last " << E_last << "\n";
+    DeviceBuffer<T> p = search_direction();
+    std::cout << "Initial p " << std::endl;;
+    T residual = max_vector(p) / h;
+    std::cout << "Initial residual " << residual << "\n";
+    // std::cout <<"x.size() "<<x.size()<<std::endl;
+    while (residual > tol)
+    {
+        // Line search
+        T alpha = 1;
+        DeviceBuffer<T> x0 = x;
+        update_x(add_vector<T>(x0, p, 1.0, alpha));
+        std::cout << "Initial x " << std::endl;
+        while (IP_val() > E_last)
+        {
+            alpha /= 2;
+            update_x(add_vector<T>(x0, p, 1.0, alpha));
+        }
+        std::cout << "step size = " << alpha << "\n";
+        E_last = IP_val();
+        // std::cout << "E_last " << E_last << "\n";
+        std::cout << "Iteration " << iter << " residual " << residual << "E_last" << E_last << "\n";
+        p = search_direction();
+        residual = max_vector(p) / h;
+        std::cout << "residual " << residual << "\n";
+        iter += 1;
+        std::cout<<"iter: "<<iter<<std::endl;
+        if (alpha < 1e-10)
+        {
+            break;
+        }
+    }
+    update_v(add_vector<T>(x, x_n, 1 / h, -1 / h));
+    std::cout <<"x.size() "<<x.size()<<std::endl;
+    std::cout << "Final E_last " << E_last << "\n";
+    std::cout << "covariance_.size(): " << covariance_.size() << std::endl;
+    std::cout << "x[0]: " << x[0] << std::endl;
+    for (int i = 0; i < x.size() / dim; i++) {
+        for (int j = 0; j < dim; j++) {
+            covariance_[i * 16 + 12 + j] = x[i * dim + j];
+        }
+    }
+    shape_matching(x_n);
+}
+/*
+template <typename T, int dim>
+T MassSpringSimulator<T, dim>::Impl::screen_projection_x(T point)
+{
+    return offset + scale * point;
+}
+template <typename T, int dim>
+T MassSpringSimulator<T, dim>::Impl::screen_projection_y(T point)
+{
+    return resolution - (offset + scale * point);
+}
+*/
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::update_x(const DeviceBuffer<T> &new_x)
+{
+    inertialenergy.update_x(new_x);
+    massspringenergy.update_x(new_x);
+    new_x.copy_to(x);
+}
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::update_x_tilde(const DeviceBuffer<T> &new_x_tilde)
+{
+    inertialenergy.update_x_tilde(new_x_tilde);
+    new_x_tilde.copy_to(x_tilde);
+}
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::update_v(const DeviceBuffer<T> &new_v)
+{
+    new_v.copy_to(v);
+}
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::update_covariance(const DeviceBuffer<T> &new_covariance)
+{
+    new_covariance.copy_to(covariance_);
+}
+/*
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::draw()
+{
+    window.clear(sf::Color::White); // Clear the previous frame
+
+    // Draw springs as lines
+    for (int i = 0; i < e.size() / 2; ++i)
+    {
+        sf::Vertex line[] = {
+            sf::Vertex(sf::Vector2f(screen_projection_x(x[e[i * 2] * dim]), screen_projection_y(x[e[i * 2] * dim + 1])), sf::Color::Blue),
+            sf::Vertex(sf::Vector2f(screen_projection_x(x[e[i * 2 + 1] * dim]), screen_projection_y(x[e[i * 2 + 1] * dim + 1])), sf::Color::Blue)};
+        window.draw(line, 2, sf::Lines);
+    }
+
+    // Draw masses as circles
+    for (int i = 0; i < x.size() / dim; ++i)
+    {
+        sf::CircleShape circle(radius); // Set a fixed radius for each mass
+        circle.setFillColor(sf::Color::Red);
+        circle.setPosition(screen_projection_x(x[i * dim]) - radius, screen_projection_y(x[i * dim + 1]) - radius); // Center the circle on the mass
+        window.draw(circle);
+    }
+
+    window.display(); // Display the rendered frame
+}
+*/
+template <typename T, int dim>
+T MassSpringSimulator<T, dim>::Impl::IP_val()
+{
+    // std::cout<<"Inertial energy "<<inertialenergy.val()<<std::endl;
+    // std::cout<<"Mass spring energy "<<massspringenergy.val()<<std::endl;
+    return inertialenergy.val() + massspringenergy.val() * h * h;
+}
+
+template <typename T, int dim>
+DeviceBuffer<T> MassSpringSimulator<T, dim>::Impl::IP_grad()
+{
+    return add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h);
+}
+
+template <typename T, int dim>
+DeviceTripletMatrix<T, 1> MassSpringSimulator<T, dim>::Impl::IP_hess()
+{
+    DeviceTripletMatrix<T, 1> inertial_hess = inertialenergy.hess();
+    DeviceTripletMatrix<T, 1> massspring_hess = massspringenergy.hess();
+    DeviceTripletMatrix<T, 1> hess = add_triplet<T>(inertial_hess, massspring_hess, 1.0, h * h);
+    return hess;
+}
+
+template <typename T, int dim>
+DeviceBuffer<T> MassSpringSimulator<T, dim>::Impl::search_direction()
+{
+    DeviceBuffer<T> dir;
+    dir.resize(x.size());
+    search_dir(IP_grad(), IP_hess(), dir);
+    return dir;
+}
+
+template <typename T, int dim>
+__global__ void shape_matching_kernel(
+    const T* x_device, const T* x0_device, const int* elements_device,
+    T* covariance_device, int num_particles, int num_elements) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_particles) return;
+
+    extern __shared__ char shared_mem_raw[];
+    T* shared_mem = reinterpret_cast<T*>(shared_mem_raw);
+
+    T* connected_x = shared_mem;
+    T* connected_x0 = shared_mem + num_elements * dim;
+
+    int count = 0;
+
+    for (int j = 0; j < num_elements; j++) {
+        if (elements_device[2 * j] == i) {
+            for (int k = 0; k < dim; k++) {
+                connected_x[count * dim + k] = x_device[elements_device[2 * j + 1] * dim + k];
+                connected_x0[count * dim + k] = x0_device[elements_device[2 * j + 1] * dim + k];
+            }
+            count++;
+        } else if (elements_device[2 * j + 1] == i) {
+            for (int k = 0; k < dim; k++) {
+                connected_x[count * dim + k] = x_device[elements_device[2 * j] * dim + k];
+                connected_x0[count * dim + k] = x0_device[elements_device[2 * j] * dim + k];
+            }
+            count++;
+        }
+    }
+
+    if (count < dim) {
+        return;
+    }
+
+    Eigen::Matrix<T, dim, 1> x_cm = Eigen::Matrix<T, dim, 1>::Zero();
+    Eigen::Matrix<T, dim, 1> x0_cm = Eigen::Matrix<T, dim, 1>::Zero();
+
+    for (int k = 0; k < count; k++) {
+        for (int d = 0; d < dim; d++) {
+            x_cm(d) += connected_x[k * dim + d];
+            x0_cm(d) += connected_x0[k * dim + d];
+        }
+    }
+    x_cm /= count;
+    x0_cm /= count;
+
+    Eigen::Matrix<T, Eigen::Dynamic, dim> P(count, dim);
+    Eigen::Matrix<T, Eigen::Dynamic, dim> Q(count, dim);
+    for (int k = 0; k < count; k++) {
+        for (int d = 0; d < dim; d++) {
+            P(k, d) = connected_x[k * dim + d] - x_cm(d);
+            Q(k, d) = connected_x0[k * dim + d] - x0_cm(d);
+        }
+    }
+
+    Eigen::Matrix<T, dim, dim> A_pq = P.transpose() * Q;
+    Eigen::Matrix<T, dim, dim> A_qq = (Q.transpose() * Q).inverse();
+    Eigen::Matrix<T, dim, dim> A = A_pq.transpose() * A_pq;
+    Eigen::Matrix<T, dim, dim> S = sqrt_matrix(A);
+    Eigen::Matrix<T, dim, dim> R = A_pq * S.inverse();
+
+    for (int k = 0; k < dim; k++) {
+        for (int d = 0; d < dim; d++) {
+            /*
+            // covariance[:3, :3] =  R @ covariance[:3, :3] 
+            covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 0;
+            for (int l = 0; l < dim; l++) {
+                covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] += R(d, l) * covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + l];
+            }
+            */
+            // It seems that covariance[:3, :3] is not the rotation matrix(even not symmetric)
+            // We directly return the rotation matrix
+            covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = R(k, d);
+        }
+    }
+}
+
+template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::shape_matching(const DeviceBuffer<T> &x0) {
+    // Convert input vectors to device buffers
+    DeviceBuffer<T> x_device = x;
+    DeviceBuffer<T> x0_device = x0;
+    DeviceBuffer<int> elements_device = elements;
+    DeviceBuffer<T> covariance_device = covariance_;
+
+    int num_particles = x.size() / dim;
+    int num_elements = elements.size() / 2;
+
+    int threads_per_block = 256;
+    int num_blocks = (num_particles + threads_per_block - 1) / threads_per_block;
+    size_t shared_memory_size = num_elements * dim * sizeof(T) * 2;
+
+    shape_matching_kernel<T, dim><<<num_blocks, threads_per_block, shared_memory_size>>>(
+        x_device.data(), x0_device.data(), elements_device.data(),
+        covariance_device.data(), num_particles, num_elements);
+
+    // Copy data back to host if necessary
+    update_covariance(covariance_device);
+}
+
+
+template class MassSpringSimulator<float, 2>;
+template class MassSpringSimulator<double, 2>;
+template class MassSpringSimulator<float, 3>;
+template class MassSpringSimulator<double, 3>;
