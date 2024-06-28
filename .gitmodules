@@ -4,3 +4,9 @@
 [submodule "submodules/simple-knn"]
 	path = submodules/simple-knn
 	url = https://gitlab.inria.fr/bkerbl/simple-knn.git
+[submodule "phys_engine/cpp/solid-sim-muda/muda"]
+	path = phys_engine/cpp/solid-sim-muda/muda
+	url = https://github.com/MuGdxy/muda.git
+[submodule "phys_engine/cpp/solid-sim-muda/pybind11"]
+	path = phys_engine/cpp/solid-sim-muda/pybind11
+	url = https://github.com/pybind/pybind11.git
