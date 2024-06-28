@@ -23,9 +23,49 @@ from gaussian_renderer import GaussianModel
 from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
 from phys_engine.mass_spring import simulation
+import numpy as np
 
 import open3d as o3d
+def quaternion_to_rotation_matrix(quaternion):
+    """
+    Convert a quaternion to a 3x3 rotation matrix.
+    
+    Args:
+        quaternion (torch.Tensor): A tensor of shape (4,) representing the quaternion (w, x, y, z).
+        
+    Returns:
+        torch.Tensor: A tensor of shape (3, 3) representing the rotation matrix.
+    """
+    w, x, y, z = quaternion
+    ww, xx, yy, zz = w*w, x*x, y*y, z*z
+    wx, wy, wz = w*x, w*y, w*z
+    xy, xz, yz = x*y, x*z, y*z
+    
+    rotation_matrix = torch.tensor([
+        [1 - 2*(yy + zz), 2*(xy - wz), 2*(xz + wy)],
+        [2*(xy + wz), 1 - 2*(xx + zz), 2*(yz - wx)],
+        [2*(xz - wy), 2*(yz + wx), 1 - 2*(xx + yy)]
+    ])
+    
+    return rotation_matrix
 
+def rotation_matrix_to_quaternion(rotation_matrix):
+    """
+    Convert a 3x3 rotation matrix to a quaternion.
+    
+    Args:
+        rotation_matrix (torch.Tensor): A tensor of shape (3, 3) representing the rotation matrix.
+        
+    Returns:
+        torch.Tensor: A tensor of shape (4,) representing the quaternion (w, x, y, z).
+    """
+    trace = rotation_matrix[0, 0] + rotation_matrix[1, 1] + rotation_matrix[2, 2]
+    w = torch.sqrt(1 + trace) / 2
+    x = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / (4*w)
+    y = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / (4*w)
+    z = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / (4*w)
+    
+    return torch.tensor([w, x, y, z])
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -93,11 +133,24 @@ if __name__ == "__main__":
     #bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
-    for i in range(0, 200, 40):
+    print("len(cloth_xyz): ", len(cloth_xyz))
+    # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
+    x_history = np.load("/home/renbowen/x_history.npy")
+    covariance_history = np.load("/home/renbowen/covariance_history.npy")
+    covariance0 = cloth_gaussians.get_covariance()
+    print("covariance_history.shape: ", covariance_history.shape)
+    print("len(x_history): ", len(x_history))
+    print("rotation.shape: ", cloth_gaussians._rotation.shape)
+    for i in range(0, 20, 5):
     #   for i in range(0, len(x_history), 10):
         print("i: ", i)
         cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
+        rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
+        print("rotations.shape: ", rotations.shape)
+        for j in range(0, len(cloth_gaussians._xyz)):
+            rotation = rotations[j].reshape(4, 4)
+            cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
+
 
         train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}".format(scene.loaded_iter, i))
         test_dir = os.path.join(args.model_path, 'test', "ours_{}".format(scene.loaded_iter))
