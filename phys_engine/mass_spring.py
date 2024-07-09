@@ -253,6 +253,7 @@ def set_spring(covariance):
     initial_length = []
     stiffness = []
     volume = []
+    springs = [[] for _ in range(len(covariance))]
     for i in range(len(covariance)):
         square = 0
         dens = []
@@ -260,26 +261,48 @@ def set_spring(covariance):
             dens.append(np.linalg.norm(covariance[i][3][:3] - covariance[j][3][:3]))
         dens = np.array(dens)
         dens = sorted(dens)
+        # if (dens[6] > 0.5):
+        #     print("+1")
+        #     volume.append(1e-2)
+        #     continue
         for j in range(len(covariance)):
             den = np.linalg.norm(covariance[i][3][:3] - covariance[j][3][:3])
-            if (j != i and den < dens[10]):
+            if (j != i and den < dens[6]):
+                is_connected = False
+                if (j < i):
+                    for k in range(len(springs[i])):
+                        if(springs[i][k] == j):
+                            is_connected = True
+                            break
                 # print("dens: ", dens)
+                if (is_connected):
+                    continue
                 elements.append([i, j])
                 initial_length.append(den)
                 stiffness.append(1e5)
+                springs[i].append(j)
+                springs[j].append(i)
                 # print("i: ", i, "j: ", j, "overlap: ", dens)
-        for i in range(10):
-            square += dens[i]
-        square = (square / 10) ** 2
-        volume.append(square * 1e-3)
+        for j in range(6):
+            square += dens[j]
+        square = (square / 6) ** 2
+        # volume.append(square * 1e-3)
+        volume.append(np.linalg.norm(covariance[i][0][:3]) * np.linalg.norm(covariance[i][1][:3]) * 1e-3)
+    spring_volume = np.zeros(len(elements))
+    # print("len(volume): ", len(volume))
+    # for i in range(len(covariance)):
+    #     print("i: ", i, "spring[i]", len(springs[i]))
+    for i in range(len(elements)):
+        spring_volume[i] = volume[elements[i][0]] / len(springs[elements[i][0]]) + volume[elements[i][1]] / len(springs[elements[i][1]])
+        
+
 
     print("len(elements): ", len(elements))
     np.save("/home/renbowen/elements.npy", elements)
     np.save("/home/renbowen/initial_length.npy", initial_length)
-    return elements, initial_length, stiffness, volume
+    return elements, initial_length, stiffness, volume, spring_volume
 
 def simulation(x, covariance):
-    print("len(x): ", len(x))
     # reference: https://github.com/phys-sim-book/solid-sim-tutorial/tree/main/1_mass_spring
     x_history = []
     covariance_history = []
@@ -288,11 +311,12 @@ def simulation(x, covariance):
     covariance = covariance.detach().cpu().numpy().copy()
     print("covariance.shape: ", covariance.shape)
     for i in range (100): 
-        print("x_: ", covariance[i])
+        # print("x_: ", covariance[i])
+        pass
     print("finish init")
     # np.savetxt('/home/renbowen/covariance.csv', covariance.reshape(covariance.shape[0], -1), delimiter=',', fmt='%.6f', header=','.join([f'Val{i}' for i in range(16)]), comments='')
     start_time = time.time()
-    elements, initial_length, stiffness, volume = set_spring(covariance)
+    # elements, initial_length, stiffness, volume, spring_volume = set_spring(covariance)
     # elements = np.load("/home/renbowen/elements.npy")
     # np.savetxt('/home/renbowen/elements.csv', elements.reshape(-1), delimiter=',', fmt='%.6f', header='Col1', comments='')
     # initial_length = np.load("/home/renbowen/initial_length.npy")
@@ -302,14 +326,21 @@ def simulation(x, covariance):
     #elements = np.load("elements.npy")
     #initial_length = np.load("initial_length.npy")
     #stiffness = np.load("stiffness.npy")
-    np.save("elements.npy", elements)
-    np.save("initial_length.npy", initial_length)
-    np.save("stiffness.npy", stiffness)
-    np.save("volume.npy", volume)
+    # np.save("/home/renbowen/elements.npy", elements)
+    # np.save("/home/renbowen/initial_length.npy", initial_length)
+    # np.save("/home/renbowen/stiffness.npy", stiffness)
+    # np.save("/home/renbowen/volume.npy", volume)
+    # np.save("/home/renbowen/spring_volume.npy", spring_volume)
+    elements = np.load("/home/renbowen/elements.npy")
+    initial_length = np.load("/home/renbowen/initial_length.npy")
+    stiffness = np.load("/home/renbowen/stiffness.npy")
+    volume = np.load("/home/renbowen/volume.npy")
+    spring_volume = np.load("/home/renbowen/spring_volume.npy")
     # hyperparameters
     rho = 5e2  # mass density
-    h = 0.1  # time step
-    frame_num = 20
+    h = 0.02  # time step
+    torlerance = 1e-4
+    frame_num = 2
     velocity = np.zeros((len(x), 3))
     '''
     rhos = []
@@ -318,16 +349,16 @@ def simulation(x, covariance):
     '''
     print("len(x): ", len(x))
     simulator = simulators.MassSpringSimulator3d(
-        rho * volume, # mass of each node
+        rho * np.array(volume), # mass of each node
         1,
         1, #initial_stretch,  not used
-        stiffness, #stiffness,
-        0.02, 
-        0.01, 
+        np.array(stiffness * spring_volume * 10), #stiffness,
+        h, 
+        torlerance, 
         1, 
-        initial_length.reshape(-1),
+        np.array(initial_length).reshape(-1),
         covariance.reshape(-1), 
-        elements.reshape(-1),  
+        np.array(elements).reshape(-1),  
     )
     print("len(x): ", len(x))
     for i in range(frame_num):
@@ -335,14 +366,17 @@ def simulation(x, covariance):
         num = 0
         print("len(x): ", len(x))
         for j in range(len(x)):
-            if (x0[j][2] < 2.7 and x0[j][2] > 2.3 and x0[j][0] > -0.6 and x0[j][0] < -0.3):
-                velocity[j][1] = -30
+            # if (x0[j][2] < 2.7 and x0[j][2] > 2.3 and x0[j][0] > -0.6 and x0[j][0] < -0.3):
+            if (x0[j][0] > 0.45):
+                velocity[j][0] = 1
                 num += 1
         print("num_set_v: ", num)
-        if(i == 0):
-            simulator.set_v(velocity.reshape(-1))
+        # if(i == 0):
+        simulator.set_v(velocity.reshape(-1))
         simulator.run()
-        print("max_v: ", np.max(simulator.get_v()))
+        velocity = np.array(simulator.get_v()).reshape(-1, 3)
+        print("max_v: ", np.max(np.abs(simulator.get_v())))
+        # x0 = x.copy()
         x = np.array(simulator.get_x()).reshape(-1, 3)
         covariance = simulator.get_covariance()
         x_history.append(x)

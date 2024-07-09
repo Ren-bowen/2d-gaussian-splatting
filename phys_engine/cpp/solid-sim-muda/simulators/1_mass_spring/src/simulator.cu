@@ -1,11 +1,12 @@
 #include "simulator.h"
-#include <SFML/Graphics.hpp>
+// #include <SFML/Graphics.hpp>
 #include "InertialEnergy.h"
 #include "MassSpringEnergy.h"
 #include <muda/muda.h>
 #include <muda/container.h>
 #include "uti.h"
 #include "device_uti.h"
+#include "uti.h"
 using namespace muda;
 template <typename T, int dim>
 struct MassSpringSimulator<T, dim>::Impl
@@ -79,16 +80,10 @@ MassSpringSimulator<T, dim>::Impl::Impl(std::vector<T> M, T side_len, T initial_
     {
         e[i] = elements[i];
     }
-    l2.resize(e.size() / 2);
-    for (int i = 0; i < e.size() / 2; i++)
+    l2.resize(initial_length.size());
+    for (int i = 0; i < initial_length.size(); i++)
     {
-        T diff = 0;
-        int idx1 = e[2 * i], idx2 = e[2 * i + 1];
-        for (int d = 0; d < dim; d++)
-        {
-            diff += (x[idx1 * dim + d] - x[idx2 * dim + d]) * (x[idx1 * dim + d] - x[idx2 * dim + d]);
-        }
-        l2[i] = diff;
+        l2[i] = initial_length[i] * initial_length[i];
     }
     m.resize(M.size());
     for (int i = 0; i < M.size(); i++)
@@ -166,15 +161,50 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
     DeviceBuffer<T> x_tilde(x.size()); // Predictive position
     // std::cout<<"h "<<h<<std::endl;
     update_x_tilde(add_vector<T>(x, v, 1, h));
+    std::vector<T> x_ = x;
     DeviceBuffer<T> x_n = x; // Copy current positions to x_n
     std::cout <<"x.size() "<<x.size()<<std::endl;
     int iter = 0;
     T E_last = IP_val();
     std::cout << "Initial E_last " << E_last << "\n";
     DeviceBuffer<T> p = search_direction();
-    std::cout << "Initial p " << std::endl;;
     T residual = max_vector(p) / h;
     std::cout << "Initial residual " << residual << "\n";
+    std::vector<T> test;
+    test.resize(x.size());
+    for (int i = 0; i < x.size(); i++) {
+        if (i / 2 != 0)
+            test[i] = 1e-4;
+        else
+            test[i] = 0;
+    }
+    DeviceBuffer<T> test_device = test;
+    update_x(add_vector<T>(x, test_device, 1.0, 1.0));
+    T val1 = IP_val();
+    DeviceBuffer<T> grad1 = IP_grad();
+    update_x(add_vector<T>(x, test_device, 1.0, -2.0));
+    T val2 = IP_val();
+    DeviceBuffer<T> grad2 = IP_grad();
+    update_x(add_vector<T>(x, test_device, 1.0, 1.0));
+    T numerical_diff = 0.5 * (val1 - val2);
+    DeviceBuffer<T> grad_numerical_diff = add_vector<T>(grad1, grad2, 0.5, -0.5);
+    T analytical_diff = devicesum(multi_vector<T>(IP_grad(), test_device));
+    DeviceBuffer<T> grad_analytical_diff;
+    grad_analytical_diff.resize(x.size());
+    matrix_plus_vector(IP_hess(), test_device, grad_analytical_diff);
+    DeviceBuffer<T> grad_error_device;
+    grad_error_device.resize(x.size());
+    // hess = d(grad)dx, hess(x) @ test = grad(x + 0.5 * test) - grad(x - 0.5 * test)
+    grad_error_device = add_vector<T>(grad_numerical_diff, grad_analytical_diff, 1.0, -1.0);
+    T grad_error = sqrt(devicesum(multi_vector(grad_error_device, grad_error_device)));
+    T grad_numerical_diff_norm = sqrt(devicesum(multi_vector(grad_numerical_diff, grad_numerical_diff)));
+    T grad_analytical_diff_norm = sqrt(devicesum(multi_vector(grad_analytical_diff, grad_analytical_diff)));
+    // T numerical_diff = IP_val() - E_last;
+    // T analytical_diff = devicesum(multi_vector<T>(IP_grad(), test_device));
+    // std::cout << "Numerical diff " << numerical_diff << " Analytical diff " << analytical_diff << "\n";
+    std::cout << "Numerical diff " << numerical_diff << " Analytical diff " << analytical_diff << "\n";
+    std::cout << "grad_error " << grad_error << "\n";
+    std::cout << "grad_numerical_diff_norm " << grad_numerical_diff_norm << " grad_analytical_diff_norm " << grad_analytical_diff_norm << "\n";
     // std::cout <<"x.size() "<<x.size()<<std::endl;
     while (residual > tol)
     {
@@ -182,7 +212,6 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
         T alpha = 1;
         DeviceBuffer<T> x0 = x;
         update_x(add_vector<T>(x0, p, 1.0, alpha));
-        std::cout << "Initial x " << std::endl;
         while (IP_val() > E_last)
         {
             alpha /= 2;
@@ -191,14 +220,13 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
         std::cout << "step size = " << alpha << "\n";
         E_last = IP_val();
         // std::cout << "E_last " << E_last << "\n";
-        std::cout << "Iteration " << iter << " residual " << residual << "E_last" << E_last << "\n";
         p = search_direction();
         residual = max_vector(p) / h;
-        std::cout << "residual " << residual << "\n";
         iter += 1;
-        std::cout<<"iter: "<<iter<<std::endl;
-        if (alpha < 1e-10)
+        std::cout << "Iteration " << iter << " residual " << residual << "E_last" << E_last << "\n";
+        if (iter > 100)
         {
+            std::cout << "Newton iteration failed\n" << std::endl;
             break;
         }
     }
@@ -206,7 +234,6 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
     std::cout <<"x.size() "<<x.size()<<std::endl;
     std::cout << "Final E_last " << E_last << "\n";
     std::cout << "covariance_.size(): " << covariance_.size() << std::endl;
-    std::cout << "x[0]: " << x[0] << std::endl;
     for (int i = 0; i < x.size() / dim; i++) {
         for (int j = 0; j < dim; j++) {
             covariance_[i * 16 + 12 + j] = x[i * dim + j];
@@ -281,6 +308,7 @@ T MassSpringSimulator<T, dim>::Impl::IP_val()
 {
     // std::cout<<"Inertial energy "<<inertialenergy.val()<<std::endl;
     // std::cout<<"Mass spring energy "<<massspringenergy.val()<<std::endl;
+    // return massspringenergy.val() * h * h;
     return inertialenergy.val() + massspringenergy.val() * h * h;
 }
 
@@ -288,6 +316,7 @@ template <typename T, int dim>
 DeviceBuffer<T> MassSpringSimulator<T, dim>::Impl::IP_grad()
 {
     return add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h);
+    // return add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h);
 }
 
 template <typename T, int dim>
@@ -296,6 +325,7 @@ DeviceTripletMatrix<T, 1> MassSpringSimulator<T, dim>::Impl::IP_hess()
     DeviceTripletMatrix<T, 1> inertial_hess = inertialenergy.hess();
     DeviceTripletMatrix<T, 1> massspring_hess = massspringenergy.hess();
     DeviceTripletMatrix<T, 1> hess = add_triplet<T>(inertial_hess, massspring_hess, 1.0, h * h);
+    // DeviceTripletMatrix<T, 1> hess = inertial_hess;
     return hess;
 }
 

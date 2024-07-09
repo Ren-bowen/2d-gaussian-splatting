@@ -72,6 +72,25 @@ template DeviceBuffer<float> mult_vector<float>(const DeviceBuffer<float> &a, co
 template DeviceBuffer<double> mult_vector<double>(const DeviceBuffer<double> &a, const double &b);
 
 template <typename T>
+DeviceBuffer<T> multi_vector(const DeviceBuffer<T> &a, const DeviceBuffer<T> &b)
+{
+    int N = a.size();
+    DeviceBuffer<T> c_device(N);
+    ParallelFor(256)
+        .apply(N,
+               [c_device = c_device.viewer(), a_device = a.cviewer(), b_device = b.cviewer()] __device__(int i) mutable
+               {
+                   c_device(i) = a_device(i) * b_device(i);
+               })
+        .wait();
+    return c_device;
+}
+
+template DeviceBuffer<float> multi_vector<float>(const DeviceBuffer<float> &a, const DeviceBuffer<float> &b);
+template DeviceBuffer<double> multi_vector<double>(const DeviceBuffer<double> &a, const DeviceBuffer<double> &b);
+
+
+template <typename T>
 DeviceTripletMatrix<T, 1> add_triplet(const DeviceTripletMatrix<T, 1> &a, const DeviceTripletMatrix<T, 1> &b, const T &factor1, const T &factor2)
 {
     int Na = a.triplet_count();
@@ -152,6 +171,27 @@ void search_dir(const DeviceBuffer<T> &grad, const DeviceTripletMatrix<T, 1> &he
 }
 template void search_dir<float>(const DeviceBuffer<float> &grad, const DeviceTripletMatrix<float, 1> &hess, DeviceBuffer<float> &dir);
 template void search_dir<double>(const DeviceBuffer<double> &grad, const DeviceTripletMatrix<double, 1> &hess, DeviceBuffer<double> &dir);
+
+template <typename T>
+void matrix_plus_vector(const DeviceTripletMatrix<T, 1> &A, const DeviceBuffer<T> &x, DeviceBuffer<T> &b)
+{
+    static LinearSystemContext ctx;
+    int N = x.size();
+    DeviceDenseVector<T> x_device;
+    x_device.resize(N);
+    x_device.buffer_view().copy_from(x);
+    DeviceCOOMatrix<T> A_coo;
+    ctx.convert(A, A_coo);
+    DeviceCSRMatrix<T> A_csr;
+    ctx.convert(A_coo, A_csr);
+    DeviceDenseVector<T> b_device;
+    b_device.resize(N);
+    ctx.spmv(A_csr.cview(), x_device.cview(), b_device.view());
+    ctx.sync();
+    b.view().copy_from(b_device.buffer_view());
+}
+template void matrix_plus_vector<float>(const DeviceTripletMatrix<float, 1> &A, const DeviceBuffer<float> &x, DeviceBuffer<float> &b);
+template void matrix_plus_vector<double>(const DeviceTripletMatrix<double, 1> &A, const DeviceBuffer<double> &x, DeviceBuffer<double> &b);
 
 template <typename T>
 void display_vec(const DeviceBuffer<T> &vec)

@@ -9,7 +9,7 @@ namespace py = pybind11;
 
 PYBIND11_MODULE(simulators, m) {
     py::class_<MassSpringSimulator<float, 2>>(m, "MassSpringSimulator2f")
-        .def(py::init<std::vector<float>, float, float, std::vector<float>, float, float, int,cat /var/log/dpkg.log | grep nvidiastd::vector<float>, std::vector<float>, std::vector<int>>())
+        .def(py::init<std::vector<float>, float, float, std::vector<float>, float, float, int,std::vector<float>, std::vector<float>, std::vector<int>>())
         .def("run", &MassSpringSimulator<float, 2>::run)
         .def("get_x", &MassSpringSimulator<float, 2>::get_x)
         .def("get_v", &MassSpringSimulator<float, 2>::get_v)

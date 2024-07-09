@@ -14,19 +14,19 @@ add_subdirectory(muda)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-include(FetchContent)
-FetchContent_Declare(
-    SFML
-    GIT_REPOSITORY https://github.com/SFML/SFML.git
-    GIT_TAG 2.6.x
-)
+# include(FetchContent)
+# FetchContent_Declare(
+#     SFML
+#     GIT_REPOSITORY https://github.com/SFML/SFML.git
+#     GIT_TAG 2.6.x
+# )
 
-set(SFML_CMAKE_ARGS
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-    -DCMAKE_CXX_FLAGS=-fPIC
-)
+# set(SFML_CMAKE_ARGS
+#     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+#     -DCMAKE_CXX_FLAGS=-fPIC
+# )
 
-FetchContent_MakeAvailable(SFML)
+# FetchContent_MakeAvailable(SFML)
 set(CMAKE_CUDA_ARCHITECTURES 75)
 set(CMAKE_CXX_STANDARD 17)
 

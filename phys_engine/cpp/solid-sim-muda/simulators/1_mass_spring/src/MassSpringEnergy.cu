@@ -3,6 +3,7 @@
 #include <muda/container.h>
 #include <stdio.h>
 #include "device_uti.h"
+#include "uti.h"
 
 using namespace muda;
 
@@ -77,7 +78,7 @@ T MassSpringEnergy<T, dim>::val()
 	auto &device_e = pimpl_->device_e;
 	auto &device_l2 = pimpl_->device_l2;
 	auto &device_k = pimpl_->device_k;
-	int N = device_e.size() / dim;
+	int N = device_e.size() / 2;
 	DeviceBuffer<T> device_val(N);
 	ParallelFor(256).apply(N, [device_val = device_val.viewer(), device_x = device_x.cviewer(), device_e = device_e.cviewer(), device_l2 = device_l2.cviewer(), device_k = device_k.cviewer()] __device__(int i) mutable
 						   {

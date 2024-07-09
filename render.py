@@ -128,6 +128,10 @@ if __name__ == "__main__":
     cloth_gaussians.active_sh_degree = gaussians.max_sh_degree
     print("gaussians._xyz.shape: ", gaussians._xyz.shape)
     print("cloth_gaussians._xyz.shape: ", cloth_gaussians._xyz.shape)
+    for i in range(100):
+        # print("scale[i]: ", cloth_gaussians._scaling[i])
+        pass
+        # print("covariance[i]: ", cloth_gaussians.get_covariance()[i])
     # for i in range(0, cloth_gaussians._xyz.shape[0]):
         # print("cloth_gaussians._xyz[{}]".format(i), cloth_gaussians._xyz[i, :])
     #bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
@@ -135,13 +139,14 @@ if __name__ == "__main__":
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     print("len(cloth_xyz): ", len(cloth_xyz))
     # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
+    # np.save("/home/renbowen/x_history.npy", x_history)
     x_history = np.load("/home/renbowen/x_history.npy")
     covariance_history = np.load("/home/renbowen/covariance_history.npy")
     covariance0 = cloth_gaussians.get_covariance()
     print("covariance_history.shape: ", covariance_history.shape)
     print("len(x_history): ", len(x_history))
     print("rotation.shape: ", cloth_gaussians._rotation.shape)
-    for i in range(0, 20, 5):
+    for i in range(0, 2, 1):
     #   for i in range(0, len(x_history), 10):
         print("i: ", i)
         cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")

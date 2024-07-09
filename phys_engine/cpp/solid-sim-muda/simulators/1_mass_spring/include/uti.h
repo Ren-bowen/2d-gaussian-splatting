@@ -14,6 +14,12 @@ template <typename T>
 DeviceBuffer<T> mult_vector(const DeviceBuffer<T> &a, const T &b);
 
 template <typename T>
+DeviceBuffer<T> multi_vector(const DeviceBuffer<T> &a, const DeviceBuffer<T> &b);
+
+template <typename T>
+void matrix_plus_vector(const DeviceTripletMatrix<T, 1> &A, const DeviceBuffer<T> &x, DeviceBuffer<T> &b);
+
+template <typename T>
 DeviceTripletMatrix<T, 1> add_triplet(const DeviceTripletMatrix<T, 1> &a, const DeviceTripletMatrix<T, 1> &b, const T &factor1 = 1, const T &factor2 = 1);
 
 template <typename T>

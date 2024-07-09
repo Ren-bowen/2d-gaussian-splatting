@@ -39,6 +39,7 @@ InertialEnergy<T, dim>::InertialEnergy(int N, std::vector<T> m) : pimpl_{std::ma
 template <typename T, int dim>
 InertialEnergy<T, dim>::Impl::Impl(int N_, std::vector<T> m) : N(N_)
 {
+	device_m.resize(N);
 	device_m = m;
 	device_x.resize(N * dim);
 	device_x_tilde.resize(N * dim);
@@ -59,7 +60,9 @@ void InertialEnergy<T, dim>::generate_hess()
 			   {
 				   device_hess_row_indices(i) = i;
 				   device_hess_col_indices(i) = i;
-				   device_hess_values(i) = device_m(i);
+				   device_hess_values(i) = device_m(int(i / dim));
+				   // device_hess_values(i) = 1;
+				   // device_hess_values(i) = device_m(0);
 				   // std::cout << device_hess_values(i) << ' ' << device_hess_row_indices(i) << ' ' << device_hess_col_indices(i) << std::endl;
 				   // printf("%f %d %d\n", device_hess_values(i), device_hess_row_indices(i), device_hess_col_indices(i));
 			   })
@@ -90,13 +93,18 @@ T InertialEnergy<T, dim>::val()
 	auto &device_x = pimpl_->device_x;
 	auto &device_x_tilde = pimpl_->device_x_tilde;
 	auto &device_m = pimpl_->device_m;
-	auto N = pimpl_->N * dim;
-	DeviceBuffer<T> device_val(N);
+	auto N = pimpl_->N;
+	DeviceBuffer<T> device_val(N * dim);
 	ParallelFor(256)
 		.apply(N,
 			   [device_val = device_val.viewer(), device_x = device_x.cviewer(), device_x_tilde = device_x_tilde.cviewer(), device_m = device_m.cviewer()] __device__(int i) mutable
 			   {
-				   device_val(i) = 0.5 * device_x(i) * (device_x(i) - device_x_tilde(i)) * (device_x(i) - device_x_tilde(i));
+				   device_val(i * dim) = 0.5 * device_m(i) * (device_x(i * dim) - device_x_tilde(i * dim)) * (device_x(i * dim) - device_x_tilde(i * dim));
+				   device_val(i * dim + 1) = 0.5 * device_m(i) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1)) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1));
+				   device_val(i * dim + 2) = 0.5 * device_m(i) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2)) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2));
+				   // device_val(i * dim) = 0.5 * device_m(0) * (device_x(i * dim) - device_x_tilde(i * dim)) * (device_x(i * dim) - device_x_tilde(i * dim));
+				   // device_val(i * dim + 1) = 0.5 * device_m(0) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1)) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1));
+				   // device_val(i * dim + 2) = 0.5 * device_m(0) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2)) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2));
 				   // printf("device_x: %f\n", device_x(i));
 				   // printf("device_x_tilde: %f\n", device_x_tilde(i));
 				   // printf("%f\n", device_val(i));
@@ -111,13 +119,18 @@ const DeviceBuffer<T> &InertialEnergy<T, dim>::grad()
 	auto &device_x = pimpl_->device_x;
 	auto &device_x_tilde = pimpl_->device_x_tilde;
 	auto device_m = pimpl_->device_m;
-	auto N = pimpl_->N * dim;
+	auto N = pimpl_->N;
 	auto &device_grad = pimpl_->device_grad;
 	ParallelFor(256)
 		.apply(N,
 			   [device_x = device_x.cviewer(), device_x_tilde = device_x_tilde.cviewer(), device_m = device_m.cviewer(), N, device_grad = device_grad.viewer()] __device__(int i) mutable
 			   {
-				   device_grad(i) = device_x(i) * (device_x(i) - device_x_tilde(i));
+				   device_grad(i * dim) = device_m(i) * (device_x(i * dim) - device_x_tilde(i * dim));
+				   device_grad(i * dim + 1) = device_m(i) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1));
+				   device_grad(i * dim + 2) = device_m(i) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2));
+				   // device_grad(i * dim) = device_m(0) * (device_x(i * dim) - device_x_tilde(i * dim));
+				   // device_grad(i * dim + 1) = device_m(0) * (device_x(i * dim + 1) - device_x_tilde(i * dim + 1));
+				   // device_grad(i * dim + 2) = device_m(0) * (device_x(i * dim + 2) - device_x_tilde(i * dim + 2));
 			   })
 		.wait();
 	// display_vec(device_grad);
