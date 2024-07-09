@@ -410,8 +410,8 @@ __global__ void shape_matching_kernel(
                 covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] += R(d, l) * covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + l];
             }
             */
-            // It seems that covariance[:3, :3] is not the rotation matrix(even not symmetric)
-            // We directly return the rotation matrix
+            // Covariance[:3, :3] is not the rotation matrix, but that after rescaling.
+            // So we directly return the rotation matrix
             covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = R(k, d);
         }
     }
