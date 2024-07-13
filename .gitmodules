@@ -10,3 +10,6 @@
 [submodule "phys_engine/cpp/solid-sim-muda/pybind11"]
 	path = phys_engine/cpp/solid-sim-muda/pybind11
 	url = https://github.com/pybind/pybind11.git
+[submodule "libigl"]
+	path = libigl
+	url = https://github.com/libigl/libigl.git
