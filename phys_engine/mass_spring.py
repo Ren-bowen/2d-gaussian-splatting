@@ -316,7 +316,7 @@ def simulation(x, covariance):
     print("finish init")
     # np.savetxt('/home/renbowen/covariance.csv', covariance.reshape(covariance.shape[0], -1), delimiter=',', fmt='%.6f', header=','.join([f'Val{i}' for i in range(16)]), comments='')
     start_time = time.time()
-    # elements, initial_length, stiffness, volume, spring_volume = set_spring(covariance)
+    elements, initial_length, stiffness, volume, spring_volume = set_spring(covariance)
     # elements = np.load("/home/renbowen/elements.npy")
     # np.savetxt('/home/renbowen/elements.csv', elements.reshape(-1), delimiter=',', fmt='%.6f', header='Col1', comments='')
     # initial_length = np.load("/home/renbowen/initial_length.npy")
@@ -326,11 +326,11 @@ def simulation(x, covariance):
     #elements = np.load("elements.npy")
     #initial_length = np.load("initial_length.npy")
     #stiffness = np.load("stiffness.npy")
-    # np.save("/home/renbowen/elements.npy", elements)
-    # np.save("/home/renbowen/initial_length.npy", initial_length)
-    # np.save("/home/renbowen/stiffness.npy", stiffness)
-    # np.save("/home/renbowen/volume.npy", volume)
-    # np.save("/home/renbowen/spring_volume.npy", spring_volume)
+    np.save("/home/renbowen/elements.npy", elements)
+    np.save("/home/renbowen/initial_length.npy", initial_length)
+    np.save("/home/renbowen/stiffness.npy", stiffness)
+    np.save("/home/renbowen/volume.npy", volume)
+    np.save("/home/renbowen/spring_volume.npy", spring_volume)
     elements = np.load("/home/renbowen/elements.npy")
     initial_length = np.load("/home/renbowen/initial_length.npy")
     stiffness = np.load("/home/renbowen/stiffness.npy")
@@ -340,7 +340,7 @@ def simulation(x, covariance):
     rho = 5e2  # mass density
     h = 0.02  # time step
     torlerance = 1e-4
-    frame_num = 2
+    frame_num = 100
     velocity = np.zeros((len(x), 3))
     '''
     rhos = []
@@ -361,18 +361,19 @@ def simulation(x, covariance):
         np.array(elements).reshape(-1),  
     )
     print("len(x): ", len(x))
+
     for i in range(frame_num):
         print("time step: ", i)
         num = 0
         print("len(x): ", len(x))
         for j in range(len(x)):
-            # if (x0[j][2] < 2.7 and x0[j][2] > 2.3 and x0[j][0] > -0.6 and x0[j][0] < -0.3):
-            if (x0[j][0] > 0.45):
-                velocity[j][0] = 1
+            if (x0[j][2] < 2.7 and x0[j][2] > 2.3 and x0[j][0] > -0.6 and x0[j][0] < -0.3):
+            # if (x0[j][0] > 0.45):
+                velocity[j][1] = 1
                 num += 1
         print("num_set_v: ", num)
         # if(i == 0):
-        simulator.set_v(velocity.reshape(-1))
+        # simulator.set_v(velocity.reshape(-1))
         simulator.run()
         velocity = np.array(simulator.get_v()).reshape(-1, 3)
         print("max_v: ", np.max(np.abs(simulator.get_v())))

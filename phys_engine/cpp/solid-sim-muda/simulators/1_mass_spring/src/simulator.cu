@@ -2,12 +2,18 @@
 // #include <SFML/Graphics.hpp>
 #include "InertialEnergy.h"
 #include "MassSpringEnergy.h"
+#include "GravityEnergy.h"
 #include <muda/muda.h>
 #include <muda/container.h>
 #include "uti.h"
 #include "device_uti.h"
-#include "uti.h"
+#include <iostream>
+#include <fstream>
+#include <iomanip>
 using namespace muda;
+
+
+
 template <typename T, int dim>
 struct MassSpringSimulator<T, dim>::Impl
 {
@@ -17,18 +23,20 @@ struct MassSpringSimulator<T, dim>::Impl
     std::vector<T> initial_length;
     std::vector<T> covariance_;
     std::vector<int> elements;
+    DeviceBuffer<int> device_DBC;
     int resolution = 900, scale = 200, offset = resolution / 2, radius = 5;
     std::vector<T> x, x_tilde, v, k, l2;
     std::vector<int> e;
     // sf::RenderWindow window;
     InertialEnergy<T, dim> inertialenergy;
     MassSpringEnergy<T, dim> massspringenergy;
+    GravityEnergy<T, dim> gravityenergy;
     Impl(std::vector<T> M, T side_len, T initial_stretch, std::vector<T> K, T h_, T tol_, int n_seg, std::vector<T> initial_length, std::vector<T> covariance, std::vector<int> elements);
     void update_x(const DeviceBuffer<T> &new_x);
     void update_x_tilde(const DeviceBuffer<T> &new_x_tilde);
     void update_v(const DeviceBuffer<T> &new_v);
     void update_covariance(const DeviceBuffer<T> &new_covariance);
-    void shape_matching(const DeviceBuffer<T> &x0);
+    void shape_matching(const std::vector<T> &x0);
     T IP_val();
     void step_forward();
     //void draw();
@@ -69,6 +77,9 @@ MassSpringSimulator<T, dim>::Impl::Impl(std::vector<T> M, T side_len, T initial_
             x[i * dim + j] = covariance[i * 16 + 12 + j];
         }
     }
+    std::vector<int> DBC(x.size() / dim, 0);
+    DBC[0] = 1;
+    DBC[9] = 1;
     v.resize(x.size(), 0);
     k.resize(K.size());
     for (int i = 0; i < K.size(); i++)
@@ -97,8 +108,10 @@ MassSpringSimulator<T, dim>::Impl::Impl(std::vector<T> M, T side_len, T initial_
     }
     inertialenergy = InertialEnergy<T, dim>(N, m);
     massspringenergy = MassSpringEnergy<T, dim>(x, e, l2, k);
+    gravityenergy = GravityEnergy<T, dim>(N, m);
     DeviceBuffer<T> x_device(x);
     update_x(x_device);
+    device_DBC = DeviceBuffer<int>(DBC);
 }
 template <typename T, int dim>
 void MassSpringSimulator<T, dim>::run()
@@ -162,7 +175,7 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
     // std::cout<<"h "<<h<<std::endl;
     update_x_tilde(add_vector<T>(x, v, 1, h));
     std::vector<T> x_ = x;
-    DeviceBuffer<T> x_n = x; // Copy current positions to x_n
+    std::vector<T> x_n = x; // Copy current positions to x_n
     std::cout <<"x.size() "<<x.size()<<std::endl;
     int iter = 0;
     T E_last = IP_val();
@@ -234,11 +247,13 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
     std::cout <<"x.size() "<<x.size()<<std::endl;
     std::cout << "Final E_last " << E_last << "\n";
     std::cout << "covariance_.size(): " << covariance_.size() << std::endl;
+    /*
     for (int i = 0; i < x.size() / dim; i++) {
         for (int j = 0; j < dim; j++) {
             covariance_[i * 16 + 12 + j] = x[i * dim + j];
         }
     }
+    */
     shape_matching(x_n);
 }
 /*
@@ -258,6 +273,7 @@ void MassSpringSimulator<T, dim>::Impl::update_x(const DeviceBuffer<T> &new_x)
 {
     inertialenergy.update_x(new_x);
     massspringenergy.update_x(new_x);
+    gravityenergy.update_x(new_x);
     new_x.copy_to(x);
 }
 template <typename T, int dim>
@@ -309,13 +325,15 @@ T MassSpringSimulator<T, dim>::Impl::IP_val()
     // std::cout<<"Inertial energy "<<inertialenergy.val()<<std::endl;
     // std::cout<<"Mass spring energy "<<massspringenergy.val()<<std::endl;
     // return massspringenergy.val() * h * h;
-    return inertialenergy.val() + massspringenergy.val() * h * h;
+    return inertialenergy.val() + massspringenergy.val() * h * h + gravityenergy.val() * h * h;
+
 }
 
 template <typename T, int dim>
 DeviceBuffer<T> MassSpringSimulator<T, dim>::Impl::IP_grad()
 {
-    return add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h);
+    return add_vector<T>(add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h), gravityenergy.grad(), 1.0, h * h);
+
     // return add_vector<T>(inertialenergy.grad(), massspringenergy.grad(), 1.0, h * h);
 }
 
@@ -334,16 +352,18 @@ DeviceBuffer<T> MassSpringSimulator<T, dim>::Impl::search_direction()
 {
     DeviceBuffer<T> dir;
     dir.resize(x.size());
-    search_dir(IP_grad(), IP_hess(), dir);
+    search_dir<T, dim>(IP_grad(), IP_hess(), dir, device_DBC);
     return dir;
 }
-
+/*
 template <typename T, int dim>
 __global__ void shape_matching_kernel(
     const T* x_device, const T* x0_device, const int* elements_device,
     T* covariance_device, int num_particles, int num_elements) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // const int tid = threadIdx.x;if(tid==0) printf("!!%d\n",tid);
+    printf("i: %d\n", i);
     if (i >= num_particles) return;
 
     extern __shared__ char shared_mem_raw[];
@@ -369,8 +389,19 @@ __global__ void shape_matching_kernel(
             count++;
         }
     }
-
+    // print count
+    printf("count: %d\n", count);
     if (count < dim) {
+        for (int k = 0; k < dim; k++) {
+            for (int d = 0; d < dim; d++) {
+                // return rotation matrix as identity matrix
+                if (k == d) {
+                    covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 1;
+                } else {
+                    covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 0;
+                }
+            }
+        }
         return;
     }
 
@@ -403,43 +434,154 @@ __global__ void shape_matching_kernel(
 
     for (int k = 0; k < dim; k++) {
         for (int d = 0; d < dim; d++) {
-            /*
+            
             // covariance[:3, :3] =  R @ covariance[:3, :3] 
             covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 0;
             for (int l = 0; l < dim; l++) {
                 covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] += R(d, l) * covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + l];
             }
-            */
+            
             // Covariance[:3, :3] is not the rotation matrix, but that after rescaling.
             // So we directly return the rotation matrix
             covariance_device[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = R(k, d);
         }
     }
 }
+*/
 
 template <typename T, int dim>
+void MassSpringSimulator<T, dim>::Impl::shape_matching(const std::vector<T> &x0) {
+    int num_particles = x.size() / dim;
+    int num_elements = e.size() / 2;
+    for (int i = 0; i < num_particles; i++) {
+        T connected_x[100][3];
+        T connected_x0[100][3];
+        int count = 0;
+        for (int j = 0; j < num_elements; j++)
+        {
+            if (e[2 * j] == i)
+            {
+                for (int k = 0; k < dim; k++)
+                {
+                    connected_x[count][k] = x[e[2 * j + 1] * dim + k];
+                    connected_x0[count][k] = x0[e[2 * j + 1] * dim + k];
+                }
+                count++;
+            }
+            else if (e[2 * j + 1] == i)
+            {
+                for (int k = 0; k < dim; k++)
+                {
+                    connected_x[count][k] = x[e[2 * j] * dim + k];
+                    connected_x0[count][k] = x0[e[2 * j] * dim + k];
+                }
+                count++;
+            }
+        }
+        if (count < dim)
+        {
+            for (int k = 0; k < dim; k++)
+            {
+                for (int d = 0; d < dim; d++)
+                {
+                    // return rotation matrix as identity matrix
+                    if (k == d)
+                    {
+                        covariance_[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 1;
+                    }
+                    else
+                    {
+                        covariance_[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = 0;
+                    }
+                }
+            }
+            return;
+        }
+        Eigen::Matrix<T, dim, 1> x_cm = Eigen::Matrix<T, dim, 1>::Zero();
+        Eigen::Matrix<T, dim, 1> x0_cm = Eigen::Matrix<T, dim, 1>::Zero();
+        for (int k = 0; k < count; k++)
+        {
+            for (int d = 0; d < dim; d++)
+            {
+                x_cm(d) += connected_x[k][d];
+                x0_cm(d) += connected_x0[k][d];
+            }
+        }
+        x_cm /= count;
+        x0_cm /= count;
+        Eigen::Matrix<T, Eigen::Dynamic, dim> P(count, dim);
+        Eigen::Matrix<T, Eigen::Dynamic, dim> Q(count, dim);
+        for (int k = 0; k < count; k++)
+        {
+            for (int d = 0; d < dim; d++)
+            {
+                P(k, d) = connected_x[k][d] - x_cm(d);
+                Q(k, d) = connected_x0[k][d] - x0_cm(d);
+            }
+        }
+        Eigen::Matrix<T, dim, dim> A_pq = P.transpose() * Q;
+        // Eigen::Matrix<T, dim, dim> A_qq = (Q.transpose() * Q).inverse();
+        Eigen::Matrix<T, dim, dim> A = A_pq.transpose() * A_pq;
+        // printf("A: %f %f %f %f %f %f %f %f %f\n", A(0, 0), A(0, 1), A(0, 2), A(1, 0), A(1, 1), A(1, 2), A(2, 0), A(2, 1), A(2, 2));
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<T, dim, dim>> eigensolver(A);
+        Eigen::Matrix<T, dim, 1> lam = eigensolver.eigenvalues();
+        Eigen::Matrix<T, dim, dim> V = eigensolver.eigenvectors();
+        Eigen::Matrix<T, dim, dim> lamDiag;
+        lamDiag.setZero();
+        
+        for (int i = 0; i < dim; i++) {
+            if (lam(i) < 0) {
+                lamDiag(i, i) = 0;
+            } else {
+            lamDiag(i, i) = sqrt(lam(i));
+            }
+            // lamDiag(i, i) = (lam(i) < 0) ? 0 : sqrt(lam(i));
+        }
+        
+        Eigen::Matrix<T, dim, dim> VT = V.transpose();
+        
+        Eigen::Matrix<T, dim, dim> S = V * lamDiag * VT;
+        // printf("A: %f %f %f %f %f %f %f %f %f\n", A(0, 0), A(0, 1), A(0, 2), A(1, 0), A(1, 1), A(1, 2), A(2, 0), A(2, 1), A(2, 2));
+        Eigen::Matrix<T, dim, dim> R = A_pq * S.inverse();
+        for (int k = 0; k < dim; k++)
+        {
+            for (int d = 0; d < dim; d++)
+            {
+                covariance_[i * (dim + 1) * (dim + 1) + k * (dim + 1) + d] = R(k, d);
+            }
+        }
+    }
+
+}
+/*
+template <typename T, int dim>
 void MassSpringSimulator<T, dim>::Impl::shape_matching(const DeviceBuffer<T> &x0) {
+    std::cout << "shape matching" << std::endl;
     // Convert input vectors to device buffers
     DeviceBuffer<T> x_device = x;
     DeviceBuffer<T> x0_device = x0;
-    DeviceBuffer<int> elements_device = elements;
+    DeviceBuffer<int> elements_device = e;
     DeviceBuffer<T> covariance_device = covariance_;
 
     int num_particles = x.size() / dim;
-    int num_elements = elements.size() / 2;
+    int num_elements = e.size() / 2;
+    std::cout << "num_particles: " << num_particles << " num_elements: " << num_elements << "\n";
 
-    int threads_per_block = 256;
+    int threads_per_block = 32;
     int num_blocks = (num_particles + threads_per_block - 1) / threads_per_block;
     size_t shared_memory_size = num_elements * dim * sizeof(T) * 2;
-
+    std::cout << "shape matching" << std::endl;
+    // DeviceBuffer<T> covariance_update = shape_matching_kernal<T, dim>(x_device, x0_device, elements_device, covariance_device);
     shape_matching_kernel<T, dim><<<num_blocks, threads_per_block, shared_memory_size>>>(
-        x_device.data(), x0_device.data(), elements_device.data(),
-        covariance_device.data(), num_particles, num_elements);
-
+    x_device.data(), x0_device.data(), elements_device.data(),
+    covariance_device.data(), num_particles, num_elements);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    std::cout << "shape matching" << std::endl;
     // Copy data back to host if necessary
     update_covariance(covariance_device);
 }
-
+*/
 
 template class MassSpringSimulator<float, 2>;
 template class MassSpringSimulator<double, 2>;

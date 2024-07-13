@@ -10,3 +10,5 @@ template <typename T, int Size>
 void __device__ make_PSD(const Eigen::Matrix<T, Size, Size> &hess, Eigen::Matrix<T, Size, Size> &PSD);
 template <typename T, int dim>
 Eigen::Matrix<T, dim, dim> __device__ sqrt_matrix(const Eigen::Matrix<T, dim, dim> &A);
+template <typename T, int dim>
+muda::DeviceBuffer<T> shape_matching_kernal(const muda::DeviceBuffer<T> &x, const muda::DeviceBuffer<T> &x0, const muda::DeviceBuffer<int> &elements, const muda::DeviceBuffer<T> &covariance);
