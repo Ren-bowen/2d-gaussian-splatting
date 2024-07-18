@@ -78,8 +78,39 @@ MassSpringSimulator<T, dim>::Impl::Impl(std::vector<T> M, T side_len, T initial_
         }
     }
     std::vector<int> DBC(x.size() / dim, 0);
-    DBC[0] = 1;
-    DBC[9] = 1;
+    std::vector<int> max_id;
+    T max_y = x[1];
+    for (int i = 0; i < x.size() / dim; i++)
+    {
+        if (x[i * dim + 1] > max_y)
+        {
+            max_y = x[i * dim + 1];
+        }
+    }
+    T min_y = x[1];
+    for (int i = 0; i < x.size() / dim; i++)
+    {
+        if (x[i * dim + 1] < min_y)
+        {
+            min_y = x[i * dim + 1];
+        }
+    }
+    for (int i = 0; i < x.size() / dim; i++)
+    {
+        if (x[i * dim + 1] > 0.75 * max_y + 0.25 * min_y)
+        {
+            max_id.push_back(i);
+        }
+    }
+    std::cout << "max_y " << max_y << std::endl;
+    std::cout << "min_y " << min_y << std::endl;
+    std::cout << "max_id.size() " << max_id.size() << std::endl;
+    for (int i = 0; i < max_id.size(); i++)
+    {
+        DBC[max_id[i]] = 1;
+    }
+    // DBC[0] = 1;
+    // DBC[9] = 1;
     v.resize(x.size(), 0);
     k.resize(K.size());
     for (int i = 0; i < K.size(); i++)
@@ -237,7 +268,7 @@ void MassSpringSimulator<T, dim>::Impl::step_forward()
         residual = max_vector(p) / h;
         iter += 1;
         std::cout << "Iteration " << iter << " residual " << residual << "E_last" << E_last << "\n";
-        if (iter > 100)
+        if (iter > 100 or alpha < 1e-8)
         {
             std::cout << "Newton iteration failed\n" << std::endl;
             break;
