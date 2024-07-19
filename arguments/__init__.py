@@ -54,6 +54,11 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.n_views = 100 
+        self.random_init = False
+        self.train_split = False
+        self._object_path = "object_mask"
+        self.num_classes = 200
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -91,6 +96,12 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
+        
+        self.reg3d_interval = 2
+        self.reg3d_k = 5
+        self.reg3d_lambda_val = 2
+        self.reg3d_max_points = 300000
+        self.reg3d_sample_size = 1000
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
