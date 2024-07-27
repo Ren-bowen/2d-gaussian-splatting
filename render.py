@@ -22,7 +22,7 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
-from phys_engine.mass_spring import simulation
+# from phys_engine.mass_spring import simulation
 import numpy as np
 
 import open3d as o3d
@@ -98,6 +98,8 @@ if __name__ == "__main__":
     cloth_opacity = []
     cloth_scaling = []
     cloth_rotation = []
+    cloth_id = []
+    '''
     for i in range(0, gaussians._xyz.shape[0]):
         if (gaussians._xyz[i, 2] < 3 and gaussians._xyz[i, 2] > 2 and gaussians._xyz[i, 0] > -1.2 and gaussians._xyz[i, 0] < 0.5 and gaussians._xyz[i, 1] > 1.5 and gaussians._xyz[i, 1] < 3.5):
         #if (gaussians._xyz[i, 0] > 0 and gaussians._xyz[i, 2] > 0.1 and gaussians._xyz[i, 1] < 0):
@@ -107,6 +109,17 @@ if __name__ == "__main__":
             cloth_opacity.append(gaussians._opacity[i, :])
             cloth_scaling.append(gaussians._scaling[i, :])
             cloth_rotation.append(gaussians._rotation[i, :])
+            cloth_id.append(i)
+    np.save("/home/renbowen/cloth_id.npy", cloth_id)
+    '''
+    cloth_id = np.load("/home/renbowen/cloth_id.npy")
+    for i in range(0, len(cloth_id)):
+        cloth_xyz.append(gaussians._xyz[cloth_id[i], :])
+        cloth_features_dc.append(gaussians._features_dc[cloth_id[i], :, :])
+        cloth_features_rest.append(gaussians._features_rest[cloth_id[i], :, :])
+        cloth_opacity.append(gaussians._opacity[cloth_id[i], :])
+        cloth_scaling.append(gaussians._scaling[cloth_id[i], :])
+        cloth_rotation.append(gaussians._rotation[cloth_id[i], :])
     cloth_xyz = torch.stack(cloth_xyz, dim=0) 
     cloth_features_dc = torch.stack(cloth_features_dc, dim=0)
     cloth_features_rest = torch.stack(cloth_features_rest, dim=0)
@@ -143,10 +156,12 @@ if __name__ == "__main__":
     x_history = np.load("/home/renbowen/x_history.npy")
     covariance_history = np.load("/home/renbowen/covariance_history.npy")
     covariance0 = cloth_gaussians.get_covariance()
+    # np.save("/home/renbowen/covariance.npy", covariance0.detach().cpu().numpy())
     print("covariance_history.shape: ", covariance_history.shape)
     print("len(x_history): ", len(x_history))
     print("rotation.shape: ", cloth_gaussians._rotation.shape)
-    for i in range(0, 2, 1):
+    cov_hist = []
+    for i in range(0, 10, 10):
     #   for i in range(0, len(x_history), 10):
         print("i: ", i)
         cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
@@ -154,12 +169,14 @@ if __name__ == "__main__":
         print("rotations.shape: ", rotations.shape)
         for j in range(0, len(cloth_gaussians._xyz)):
             rotation = rotations[j].reshape(4, 4)
-            cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
+            # cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
 
 
-        train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}".format(scene.loaded_iter, i))
+        # train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}_without_rotation".format(scene.loaded_iter, i))
+        train_dir = os.path.join(args.model_path, 'train', "ours_{}".format(scene.loaded_iter))
         test_dir = os.path.join(args.model_path, 'test', "ours_{}".format(scene.loaded_iter))
-        gaussExtractor = GaussianExtractor(cloth_gaussians, render, pipe, bg_color=bg_color)    
+        gaussExtractor = GaussianExtractor(gaussians, render, pipe, bg_color=bg_color)    
+        cov_hist.append(gaussians.get_covariance().detach().cpu().numpy())
 
         if not args.skip_train:
             # print("export training images ...")
@@ -188,7 +205,8 @@ if __name__ == "__main__":
                         out_name='render_traj', 
                         num_frames=n_fames)
     
-        if not args.skip_mesh:
+        if False:
+        # if not args.skip_mesh:
             print("export mesh ...")
             os.makedirs(train_dir, exist_ok=True)
             # set the active_sh to 0 to export only diffuse texture
@@ -211,4 +229,5 @@ if __name__ == "__main__":
             mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
             o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
             print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
-    
+
+    # np.save("/home/renbowen/covariance_hist.npy", cov_hist)

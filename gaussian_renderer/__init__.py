@@ -91,13 +91,15 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
             shs = pc.get_features
+            sh_objs = pc.get_objects
     else:
         colors_precomp = override_color
     
-    rendered_image, radii, allmap = rasterizer(
+    rendered_image, radii, allmap, rendered_objects = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
+        sh_objs = sh_objs,
         colors_precomp = colors_precomp,
         opacities = opacity,
         scales = scales,
@@ -111,7 +113,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             "viewspace_points": means2D,
             "visibility_filter" : radii > 0,
             "radii": radii,
-    }
+            "render_object": rendered_objects}
 
 
     # additional regularizations
