@@ -1,9 +1,0 @@
-[submodule "muda"]
-    path = muda
-    url = https://github.com/MuGdxy/muda.git
-[submodule "external/eigen"]
-	path = external/eigen
-	url = https://gitlab.com/libeigen/eigen.git
-[submodule "external/openal"]
-	path = external/openal
-	url = https://github.com/kcat/openal-soft.git

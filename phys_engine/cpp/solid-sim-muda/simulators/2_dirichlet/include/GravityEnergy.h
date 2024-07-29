@@ -13,7 +13,7 @@ template <typename T, int dim>
 class GravityEnergy
 {
 public:
-    GravityEnergy(int N, std::vector<T> m);
+    GravityEnergy(int N, T m);
     GravityEnergy();
     ~GravityEnergy();
     GravityEnergy(GravityEnergy &&rhs);
@@ -23,7 +23,7 @@ public:
 
     void update_x(const DeviceBuffer<T> &x);
     void update_x_tilde(const DeviceBuffer<T> &x_tilde);
-    void update_m(const DeviceBuffer<T> m);
+    void update_m(T m);
     T val();                       // Calculate the value of the energy
     const DeviceBuffer<T> &grad(); // Calculate the gradient of the energy
 

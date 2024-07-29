@@ -1,8 +1,6 @@
 import numpy as np
 import cupy as cp
 from phys_engine import utils
-import scipy.sparse as sparse
-import multiprocessing
 import time
 
 def cupy_block_2d(matrices):
@@ -29,7 +27,6 @@ def grad(x, e, l2, k):
 
 def hess(x, e, l2, k):
     IJV = [cp.zeros(len(e) * 36, dtype=cp.int32), cp.zeros(len(e) * 36, dtype=cp.int32), cp.zeros(len(e) * 36, dtype=cp.float32)]
-
     for i in range(0, len(e)):
         diff = cp.asarray(x[e[i][0]]) - cp.asarray(x[e[i][1]])
         H_diff = 2 * k[i] / l2[i] * (2 * cp.outer(diff, diff) + (diff.dot(diff) - l2[i]) * cp.identity(3))
@@ -43,5 +40,4 @@ def hess(x, e, l2, k):
                         IJV[0][indStart + r * 3 + c] = e[i][nI] * 3 + r
                         IJV[1][indStart + r * 3 + c] = e[i][nJ] * 3 + c
                         IJV[2][indStart + r * 3 + c] = H_local[nI * 3 + r, nJ * 3 + c]
-
     return [cp.asnumpy(IJV[0]), cp.asnumpy(IJV[1]), cp.asnumpy(IJV[2])]

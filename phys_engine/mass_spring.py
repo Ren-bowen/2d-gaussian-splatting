@@ -309,7 +309,6 @@ def simulation(x, covariance):
     x = x.detach().cpu().numpy().copy()
     x0 = x.copy()
     covariance = covariance.detach().cpu().numpy().copy()
-    np.save("/home/renbowen/covariance.npy", covariance)
     print("covariance.shape: ", covariance.shape)
     for i in range (100): 
         # print("x_: ", covariance[i])
