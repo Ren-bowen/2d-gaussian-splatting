@@ -111,7 +111,6 @@ if __name__ == "__main__":
             cloth_rotation.append(gaussians._rotation[i, :])
             cloth_id.append(i)
     np.save("/home/renbowen/cloth_id.npy", cloth_id)
-    '''
     cloth_id = np.load("/home/renbowen/cloth_id.npy")
     for i in range(0, len(cloth_id)):
         cloth_xyz.append(gaussians._xyz[cloth_id[i], :])
@@ -141,6 +140,7 @@ if __name__ == "__main__":
     cloth_gaussians.active_sh_degree = gaussians.max_sh_degree
     print("gaussians._xyz.shape: ", gaussians._xyz.shape)
     print("cloth_gaussians._xyz.shape: ", cloth_gaussians._xyz.shape)
+    '''
     for i in range(100):
         # print("scale[i]: ", cloth_gaussians._scaling[i])
         pass
@@ -150,6 +150,7 @@ if __name__ == "__main__":
     #bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    '''
     print("len(cloth_xyz): ", len(cloth_xyz))
     # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
     # np.save("/home/renbowen/x_history.npy", x_history)
@@ -160,17 +161,19 @@ if __name__ == "__main__":
     print("covariance_history.shape: ", covariance_history.shape)
     print("len(x_history): ", len(x_history))
     print("rotation.shape: ", cloth_gaussians._rotation.shape)
+    '''
     cov_hist = []
     for i in range(0, 10, 10):
     #   for i in range(0, len(x_history), 10):
         print("i: ", i)
+        '''
         cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
         rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
         print("rotations.shape: ", rotations.shape)
         for j in range(0, len(cloth_gaussians._xyz)):
             rotation = rotations[j].reshape(4, 4)
             # cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
-
+        '''
 
         # train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}_without_rotation".format(scene.loaded_iter, i))
         train_dir = os.path.join(args.model_path, 'train', "ours_{}".format(scene.loaded_iter))

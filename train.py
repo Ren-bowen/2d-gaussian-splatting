@@ -75,8 +75,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        torch.cuda.synchronize()
         image, viewspace_point_tensor, visibility_filter, radii, objects = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["render_object"]
-        
+        torch.cuda.synchronize()
         # Object Loss
         gt_obj = viewpoint_cam.objects.cuda().long()
         logits = classifier(objects)
@@ -289,7 +290,7 @@ if __name__ == "__main__":
         exit(1)
 
     args.densify_until_iter = config.get("densify_until_iter", 15000)
-    args.num_classes = config.get("num_classes", 200)
+    args.num_classes = config.get("num_classes", 20)
     args.reg3d_interval = config.get("reg3d_interval", 2)
     args.reg3d_k = config.get("reg3d_k", 5)
     args.reg3d_lambda_val = config.get("reg3d_lambda_val", 2)
