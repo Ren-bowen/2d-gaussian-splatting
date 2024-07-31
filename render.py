@@ -22,7 +22,7 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
-from phys_engine.mass_spring import simulation
+# from phys_engine.mass_spring import simulation
 import numpy as np
 
 import open3d as o3d
@@ -98,16 +98,26 @@ if __name__ == "__main__":
     cloth_opacity = []
     cloth_scaling = []
     cloth_rotation = []
+    x_center = -0.463493
+    y_center = 2.19415
+    z_center = 2.4044
+    axis1 = np.array([1, 0, 0])
+    axis2 = np.array([0, -1, 1])
+    normal = np.cross(axis1, axis2)
     for i in range(0, gaussians._xyz.shape[0]):
         if (gaussians._xyz[i, 2] < 3 and gaussians._xyz[i, 2] > 2 and gaussians._xyz[i, 0] > -1.2 and gaussians._xyz[i, 0] < 0.5 and gaussians._xyz[i, 1] > 1.5 and gaussians._xyz[i, 1] < 3.5):
         #if (gaussians._xyz[i, 0] > 0 and gaussians._xyz[i, 2] > 0.1 and gaussians._xyz[i, 1] < 0):
-            cloth_xyz.append(gaussians._xyz[i, :])
-            cloth_features_dc.append(gaussians._features_dc[i, :, :])
-            cloth_features_rest.append(gaussians._features_rest[i, :, :])
-            cloth_opacity.append(gaussians._opacity[i, :])
-            cloth_scaling.append(gaussians._scaling[i, :])
-            cloth_rotation.append(gaussians._rotation[i, :])
-    cloth_xyz = torch.stack(cloth_xyz, dim=0) 
+            if (abs((gaussians._xyz[i, :].cpu().detach().numpy() - np.array([x_center, y_center, z_center])).dot(normal)) < 0.2 and (gaussians._xyz[i, :].cpu().detach().numpy() - np.array([x_center, y_center, z_center])).dot(normal) > -0.06):
+                cloth_xyz.append(gaussians._xyz[i, :])
+                cloth_features_dc.append(gaussians._features_dc[i, :, :])
+                cloth_features_rest.append(gaussians._features_rest[i, :, :])
+                cloth_opacity.append(gaussians._opacity[i, :])
+                cloth_scaling.append(gaussians._scaling[i, :])
+                cloth_rotation.append(gaussians._rotation[i, :])
+    cloth_xyz = torch.stack(cloth_xyz, dim=0)
+    xyz_list = [cloth_xyz.cpu().detach().numpy()]
+    np.save(r"C:\ren\code\2d-gaussian-splatting\output\7298e202-0\x_hist", np.array(xyz_list)) 
+    # assert False
     cloth_features_dc = torch.stack(cloth_features_dc, dim=0)
     cloth_features_rest = torch.stack(cloth_features_rest, dim=0)
     cloth_opacity = torch.stack(cloth_opacity, dim=0)
@@ -140,21 +150,21 @@ if __name__ == "__main__":
     print("len(cloth_xyz): ", len(cloth_xyz))
     # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
     # np.save("/home/renbowen/x_history.npy", x_history)
-    x_history = np.load("/home/renbowen/x_history.npy")
-    covariance_history = np.load("/home/renbowen/covariance_history.npy")
-    covariance0 = cloth_gaussians.get_covariance()
-    print("covariance_history.shape: ", covariance_history.shape)
-    print("len(x_history): ", len(x_history))
-    print("rotation.shape: ", cloth_gaussians._rotation.shape)
-    for i in range(0, 2, 1):
+    # x_history = np.load("/home/renbowen/x_history.npy")
+    # covariance_history = np.load("/home/renbowen/covariance_history.npy")
+    # covariance0 = cloth_gaussians.get_covariance()
+    # print("covariance_history.shape: ", covariance_history.shape)
+    # print("len(x_history): ", len(x_history))
+    # print("rotation.shape: ", cloth_gaussians._rotation.shape)
+    for i in range(0, 1, 1):
     #   for i in range(0, len(x_history), 10):
         print("i: ", i)
-        cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
-        rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
-        print("rotations.shape: ", rotations.shape)
-        for j in range(0, len(cloth_gaussians._xyz)):
-            rotation = rotations[j].reshape(4, 4)
-            cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
+        # cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
+        # rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
+        # print("rotations.shape: ", rotations.shape)
+        # for j in range(0, len(cloth_gaussians._xyz)):
+        #     rotation = rotations[j].reshape(4, 4)
+        #     cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
 
 
         train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}".format(scene.loaded_iter, i))

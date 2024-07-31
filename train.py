@@ -84,6 +84,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         normal_loss = lambda_normal * (normal_error).mean()
         dist_loss = lambda_dist * (rend_dist).mean()
 
+
+        Sp=gaussians.get_scaling
+        r = 2
+        Laniso = torch.mean(torch.maximum(torch.max(Sp, dim=1)[0] / torch.min(Sp, dim=1)[0], torch.tensor(r)) - r)
+        lambda_aniso = 10
+
+        # 新增的体积比损失
+        volumes = torch.prod(Sp, dim=1) # 计算每个高斯的体积
+        sorted_indices = torch.argsort(volumes, descending=True) # 按体积降序排序
+        alpha = 0.3 # ratio of top and bottom
+        n = len(volumes)
+        top_k = int(n * alpha)
+        
+        top_mean_volume = torch.mean(volumes[sorted_indices[:top_k]])
+        with torch.no_grad():
+            bottom_mean_volume = torch.mean(volumes[sorted_indices[-top_k:]])
+
+        min_volum_ratio = 8.0
+        Lvol_ratio = torch.max(top_mean_volume / bottom_mean_volume, torch.tensor(min_volum_ratio))-min_volum_ratio
+        lambda_vol_ratio = 0.02 
+
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
         # loss
         total_loss = loss + dist_loss + normal_loss
         
