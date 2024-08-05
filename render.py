@@ -23,9 +23,61 @@ from gaussian_renderer import GaussianModel
 from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
 # from phys_engine.mass_spring import simulation
+import colorsys
 import numpy as np
-
+from PIL import Image
+from sklearn.decomposition import PCA
 import open3d as o3d
+
+def feature_to_rgb(features):
+    # Input features shape: (16, H, W)
+    
+    # Reshape features for PCA
+    H, W = features.shape[1], features.shape[2]
+    features_reshaped = features.view(features.shape[0], -1).T
+
+    # Apply PCA and get the first 3 components
+    pca = PCA(n_components=3)
+    pca_result = pca.fit_transform(features_reshaped.cpu().numpy())
+
+    # Reshape back to (H, W, 3)
+    pca_result = pca_result.reshape(H, W, 3)
+
+    # Normalize to [0, 255]
+    pca_normalized = 255 * (pca_result - pca_result.min()) / (pca_result.max() - pca_result.min())
+
+    rgb_array = pca_normalized.astype('uint8')
+
+    return rgb_array
+
+def id2rgb(id, max_num_obj=256):
+    if not 0 <= id <= max_num_obj:
+        raise ValueError("ID should be in range(0, max_num_obj)")
+
+    # Convert the ID into a hue value
+    golden_ratio = 1.6180339887
+    h = ((id * golden_ratio) % 1)           # Ensure value is between 0 and 1
+    s = 0.5 + (id % 2) * 0.5       # Alternate between 0.5 and 1.0
+    l = 0.5
+
+    
+    # Use colorsys to convert HSL to RGB
+    rgb = np.zeros((3, ), dtype=np.uint8)
+    if id==0:   #invalid region
+        return rgb
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    rgb[0], rgb[1], rgb[2] = int(r*255), int(g*255), int(b*255)
+
+    return rgb
+
+def visualize_obj(objects):
+    rgb_mask = np.zeros((*objects.shape[-2:], 3), dtype=np.uint8)
+    all_obj_ids = np.unique(objects)
+    for id in all_obj_ids:
+        colored_mask = id2rgb(id)
+        rgb_mask[objects == id] = colored_mask
+    return rgb_mask
+
 def quaternion_to_rotation_matrix(quaternion):
     """
     Convert a quaternion to a 3x3 rotation matrix.
@@ -88,149 +140,188 @@ if __name__ == "__main__":
 
 
     dataset, iteration, pipe = model.extract(args), args.iteration, pipeline.extract(args)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
-    print("len(gaussians._xyz): ", gaussians._xyz.shape)
-    cloth_gaussians = GaussianModel(dataset.sh_degree)
-    cloth_xyz = []
-    cloth_features_dc = []
-    cloth_features_rest = []
-    cloth_opacity = []
-    cloth_scaling = []
-    cloth_rotation = []
-    cloth_id = []
-    '''
-    for i in range(0, gaussians._xyz.shape[0]):
-        if (gaussians._xyz[i, 2] < 3 and gaussians._xyz[i, 2] > 2 and gaussians._xyz[i, 0] > -1.2 and gaussians._xyz[i, 0] < 0.5 and gaussians._xyz[i, 1] > 1.5 and gaussians._xyz[i, 1] < 3.5):
-        #if (gaussians._xyz[i, 0] > 0 and gaussians._xyz[i, 2] > 0.1 and gaussians._xyz[i, 1] < 0):
-            cloth_xyz.append(gaussians._xyz[i, :])
-            cloth_features_dc.append(gaussians._features_dc[i, :, :])
-            cloth_features_rest.append(gaussians._features_rest[i, :, :])
-            cloth_opacity.append(gaussians._opacity[i, :])
-            cloth_scaling.append(gaussians._scaling[i, :])
-            cloth_rotation.append(gaussians._rotation[i, :])
-            cloth_id.append(i)
-    np.save("/home/renbowen/cloth_id.npy", cloth_id)
-    cloth_id = np.load("/home/renbowen/cloth_id.npy")
-    for i in range(0, len(cloth_id)):
-        cloth_xyz.append(gaussians._xyz[cloth_id[i], :])
-        cloth_features_dc.append(gaussians._features_dc[cloth_id[i], :, :])
-        cloth_features_rest.append(gaussians._features_rest[cloth_id[i], :, :])
-        cloth_opacity.append(gaussians._opacity[cloth_id[i], :])
-        cloth_scaling.append(gaussians._scaling[cloth_id[i], :])
-        cloth_rotation.append(gaussians._rotation[cloth_id[i], :])
-    cloth_xyz = torch.stack(cloth_xyz, dim=0) 
-    cloth_features_dc = torch.stack(cloth_features_dc, dim=0)
-    cloth_features_rest = torch.stack(cloth_features_rest, dim=0)
-    cloth_opacity = torch.stack(cloth_opacity, dim=0)
-    cloth_scaling = torch.stack(cloth_scaling, dim=0)
-    cloth_rotation = torch.stack(cloth_rotation, dim=0)
-    cloth_xyz = cloth_xyz.to(dtype=torch.float32, device="cuda")
-    cloth_features_dc = cloth_features_dc.to(dtype=torch.float32, device="cuda")
-    cloth_features_rest = cloth_features_rest.to(dtype=torch.float32, device="cuda")
-    cloth_opacity = cloth_opacity.to(dtype=torch.float32, device="cuda")
-    cloth_scaling = cloth_scaling.to(dtype=torch.float32, device="cuda")
-    cloth_rotation = cloth_rotation.to(dtype=torch.float32, device="cuda")
-    cloth_gaussians._xyz = cloth_xyz
-    cloth_gaussians._features_dc = cloth_features_dc
-    cloth_gaussians._features_rest = cloth_features_rest
-    cloth_gaussians._opacity = cloth_opacity
-    cloth_gaussians._scaling = cloth_scaling
-    cloth_gaussians._rotation = cloth_rotation
-    cloth_gaussians.active_sh_degree = gaussians.max_sh_degree
-    print("gaussians._xyz.shape: ", gaussians._xyz.shape)
-    print("cloth_gaussians._xyz.shape: ", cloth_gaussians._xyz.shape)
-    '''
-    for i in range(100):
-        # print("scale[i]: ", cloth_gaussians._scaling[i])
-        pass
-        # print("covariance[i]: ", cloth_gaussians.get_covariance()[i])
-    # for i in range(0, cloth_gaussians._xyz.shape[0]):
-        # print("cloth_gaussians._xyz[{}]".format(i), cloth_gaussians._xyz[i, :])
-    #bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
-    bg_color = [1, 1, 1]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    '''
-    print("len(cloth_xyz): ", len(cloth_xyz))
-    # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
-    # np.save("/home/renbowen/x_history.npy", x_history)
-    x_history = np.load("/home/renbowen/x_history.npy")
-    covariance_history = np.load("/home/renbowen/covariance_history.npy")
-    covariance0 = cloth_gaussians.get_covariance()
-    # np.save("/home/renbowen/covariance.npy", covariance0.detach().cpu().numpy())
-    print("covariance_history.shape: ", covariance_history.shape)
-    print("len(x_history): ", len(x_history))
-    print("rotation.shape: ", cloth_gaussians._rotation.shape)
-    '''
-    cov_hist = []
-    for i in range(0, 10, 10):
-    #   for i in range(0, len(x_history), 10):
-        print("i: ", i)
+    print("iteration: ", iteration)
+    with torch.no_grad():
+        gaussians = GaussianModel(dataset.sh_degree)
+        iteration = 30000
+        scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+        num_classes = dataset.num_classes
+        print("Num classes: ", num_classes)
+        print("len(gaussians._xyz): ", gaussians._xyz.shape)
+
+        classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
+        classifier.cuda()
+        classifier.load_state_dict(torch.load(os.path.join(dataset.model_path,"point_cloud","iteration_"+str(iteration),"classifier.pth")))
+
+        cloth_gaussians = GaussianModel(dataset.sh_degree)
+        cloth_xyz = []
+        cloth_features_dc = []
+        cloth_features_rest = []
+        cloth_opacity = []
+        cloth_scaling = []
+        cloth_rotation = []
+        cloth_id = []
         '''
-        cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
-        rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
-        print("rotations.shape: ", rotations.shape)
-        for j in range(0, len(cloth_gaussians._xyz)):
-            rotation = rotations[j].reshape(4, 4)
-            # cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
+        for i in range(0, gaussians._xyz.shape[0]):
+            if (gaussians._xyz[i, 2] < 3 and gaussians._xyz[i, 2] > 2 and gaussians._xyz[i, 0] > -1.2 and gaussians._xyz[i, 0] < 0.5 and gaussians._xyz[i, 1] > 1.5 and gaussians._xyz[i, 1] < 3.5):
+            #if (gaussians._xyz[i, 0] > 0 and gaussians._xyz[i, 2] > 0.1 and gaussians._xyz[i, 1] < 0):
+                cloth_xyz.append(gaussians._xyz[i, :])
+                cloth_features_dc.append(gaussians._features_dc[i, :, :])
+                cloth_features_rest.append(gaussians._features_rest[i, :, :])
+                cloth_opacity.append(gaussians._opacity[i, :])
+                cloth_scaling.append(gaussians._scaling[i, :])
+                cloth_rotation.append(gaussians._rotation[i, :])
+                cloth_id.append(i)
+        np.save("/home/renbowen/cloth_id.npy", cloth_id)
+        cloth_id = np.load("/home/renbowen/cloth_id.npy")
+        for i in range(0, len(cloth_id)):
+            cloth_xyz.append(gaussians._xyz[cloth_id[i], :])
+            cloth_features_dc.append(gaussians._features_dc[cloth_id[i], :, :])
+            cloth_features_rest.append(gaussians._features_rest[cloth_id[i], :, :])
+            cloth_opacity.append(gaussians._opacity[cloth_id[i], :])
+            cloth_scaling.append(gaussians._scaling[cloth_id[i], :])
+            cloth_rotation.append(gaussians._rotation[cloth_id[i], :])
+        cloth_xyz = torch.stack(cloth_xyz, dim=0) 
+        cloth_features_dc = torch.stack(cloth_features_dc, dim=0)
+        cloth_features_rest = torch.stack(cloth_features_rest, dim=0)
+        cloth_opacity = torch.stack(cloth_opacity, dim=0)
+        cloth_scaling = torch.stack(cloth_scaling, dim=0)
+        cloth_rotation = torch.stack(cloth_rotation, dim=0)
+        cloth_xyz = cloth_xyz.to(dtype=torch.float32, device="cuda")
+        cloth_features_dc = cloth_features_dc.to(dtype=torch.float32, device="cuda")
+        cloth_features_rest = cloth_features_rest.to(dtype=torch.float32, device="cuda")
+        cloth_opacity = cloth_opacity.to(dtype=torch.float32, device="cuda")
+        cloth_scaling = cloth_scaling.to(dtype=torch.float32, device="cuda")
+        cloth_rotation = cloth_rotation.to(dtype=torch.float32, device="cuda")
+        cloth_gaussians._xyz = cloth_xyz
+        cloth_gaussians._features_dc = cloth_features_dc
+        cloth_gaussians._features_rest = cloth_features_rest
+        cloth_gaussians._opacity = cloth_opacity
+        cloth_gaussians._scaling = cloth_scaling
+        cloth_gaussians._rotation = cloth_rotation
+        cloth_gaussians.active_sh_degree = gaussians.max_sh_degree
+        print("gaussians._xyz.shape: ", gaussians._xyz.shape)
+        print("cloth_gaussians._xyz.shape: ", cloth_gaussians._xyz.shape)
         '''
+        for i in range(100):
+            # print("scale[i]: ", cloth_gaussians._scaling[i])
+            pass
+            # print("covariance[i]: ", cloth_gaussians.get_covariance()[i])
+        # for i in range(0, cloth_gaussians._xyz.shape[0]):
+            # print("cloth_gaussians._xyz[{}]".format(i), cloth_gaussians._xyz[i, :])
+        #bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
+        bg_color = [1, 1, 1]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        '''
+        print("len(cloth_xyz): ", len(cloth_xyz))
+        # x_history = simulation(cloth_xyz, cloth_gaussians.get_covariance())
+        # np.save("/home/renbowen/x_history.npy", x_history)
+        x_history = np.load("/home/renbowen/x_history.npy")
+        covariance_history = np.load("/home/renbowen/covariance_history.npy")
+        covariance0 = cloth_gaussians.get_covariance()
+        # np.save("/home/renbowen/covariance.npy", covariance0.detach().cpu().numpy())
+        print("covariance_history.shape: ", covariance_history.shape)
+        print("len(x_history): ", len(x_history))
+        print("rotation.shape: ", cloth_gaussians._rotation.shape)
+        '''
+        cov_hist = []
+        for i in range(0, 10, 10):
+        #   for i in range(0, len(x_history), 10):
+            print("i: ", i)
+            '''
+            cloth_gaussians._xyz = torch.from_numpy(x_history[i]).to(dtype=torch.float32, device="cuda")
+            rotations = torch.from_numpy(covariance_history[i].reshape(-1,16)).to(dtype=torch.float32, device="cpu")
+            print("rotations.shape: ", rotations.shape)
+            for j in range(0, len(cloth_gaussians._xyz)):
+                rotation = rotations[j].reshape(4, 4)
+                # cloth_gaussians._rotation[j] = rotation_matrix_to_quaternion(rotation[:3, :3] @ quaternion_to_rotation_matrix(cloth_gaussians._rotation[j]))
+            '''
 
-        # train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}_without_rotation".format(scene.loaded_iter, i))
-        train_dir = os.path.join(args.model_path, 'train', "ours_{}".format(scene.loaded_iter))
-        test_dir = os.path.join(args.model_path, 'test', "ours_{}".format(scene.loaded_iter))
-        gaussExtractor = GaussianExtractor(gaussians, render, pipe, bg_color=bg_color)    
-        cov_hist.append(gaussians.get_covariance().detach().cpu().numpy())
+            # train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}_without_rotation".format(scene.loaded_iter, i))
+            train_dir = os.path.join(args.model_path, 'train', "ours_{}".format(scene.loaded_iter))
+            test_dir = os.path.join(args.model_path, 'test', "ours_{}".format(scene.loaded_iter))
+            gts_path = os.path.join(args.model_path, 'train', "ours_{}".format(iteration), "gt")
+            colormask_path = os.path.join(args.model_path, 'train', "ours_{}".format(iteration), "objects_feature16")
+            gt_colormask_path = os.path.join(args.model_path, 'train', "ours_{}".format(iteration), "gt_objects_color")
+            pred_obj_path = os.path.join(args.model_path, 'train', "ours_{}".format(iteration), "objects_pred")
+            makedirs(colormask_path, exist_ok=True)
+            makedirs(gt_colormask_path, exist_ok=True)
+            makedirs(pred_obj_path, exist_ok=True)
+            makedirs(gts_path, exist_ok=True)
+            gaussExtractor = GaussianExtractor(gaussians, render, pipe, bg_color=bg_color)    
+            cov_hist.append(gaussians.get_covariance().detach().cpu().numpy())
 
-        if not args.skip_train:
-            # print("export training images ...")
-            os.makedirs(train_dir, exist_ok=True)
-            gaussExtractor.reconstruction(scene.getTrainCameras())
-            gaussExtractor.export_image(train_dir)
+            for idx, view in enumerate(tqdm(scene.getTrainCameras(), desc="Rendering progress")):
+                results = render(view, gaussians, pipeline, background)
+                rendering = results["render"]
+                rendering_obj = results["render_object"]
+                
+                logits = classifier(rendering_obj)
+                pred_obj = torch.argmax(logits,dim=0)
+                pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint8))
+                
+
+                gt_objects = view.objects
+                gt_rgb_mask = visualize_obj(gt_objects.cpu().numpy().astype(np.uint8))
+
+                rgb_mask = feature_to_rgb(rendering_obj)
+                Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{0:05d}'.format(idx) + ".png"))
+                Image.fromarray(gt_rgb_mask).save(os.path.join(gt_colormask_path, '{0:05d}'.format(idx) + ".png"))
+                Image.fromarray(pred_obj_mask).save(os.path.join(pred_obj_path, '{0:05d}'.format(idx) + ".png"))
+                gt = view.original_image[0:3, :, :]
+                torchvision.utils.save_image(rendering, os.path.join(train_dir, '{0:05d}'.format(idx) + ".png"))
+                torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+
+            if not args.skip_train:
+                # print("export training images ...")
+                os.makedirs(train_dir, exist_ok=True)
+                gaussExtractor.reconstruction(scene.getTrainCameras())
+                gaussExtractor.export_image(train_dir)
+                
             
-        
-        if (not args.skip_test) and (len(scene.getTestCameras()) > 0):
-            print("export rendered testing images ...")
-            os.makedirs(test_dir, exist_ok=True)
-            gaussExtractor.reconstruction(scene.getTestCameras())
-            gaussExtractor.export_image(test_dir)
-        
-
-        if args.render_path:
-            print("render videos ...")
-            traj_dir = os.path.join(args.model_path, 'traj', "ours_{}".format(scene.loaded_iter))
-            os.makedirs(traj_dir, exist_ok=True)
-            n_fames = 240
-            cam_traj = generate_path(scene.getTrainCameras(), n_frames=n_fames)
-            gaussExtractor.reconstruction(cam_traj)
-            gaussExtractor.export_image(traj_dir)
-            create_videos(base_dir=traj_dir,
-                        input_dir=traj_dir, 
-                        out_name='render_traj', 
-                        num_frames=n_fames)
-    
-        if False:
-        # if not args.skip_mesh:
-            print("export mesh ...")
-            os.makedirs(train_dir, exist_ok=True)
-            # set the active_sh to 0 to export only diffuse texture
-            gaussExtractor.gaussians.active_sh_degree = 0
-            gaussExtractor.reconstruction(scene.getTrainCameras())
-            # extract the mesh and save
-            if args.unbounded:
-                name = 'fuse_unbounded.ply'
-                mesh = gaussExtractor.extract_mesh_unbounded(resolution=args.mesh_res)
-            else:
-                name = 'fuse.ply'
-                depth_trunc = (gaussExtractor.radius * 2.0) if args.depth_trunc < 0  else args.depth_trunc
-                voxel_size = (depth_trunc / args.mesh_res) if args.voxel_size < 0 else args.voxel_size
-                sdf_trunc = 5.0 * voxel_size if args.sdf_trunc < 0 else args.sdf_trunc
-                mesh = gaussExtractor.extract_mesh_bounded(voxel_size=voxel_size, sdf_trunc=sdf_trunc, depth_trunc=depth_trunc)
+            if (not args.skip_test) and (len(scene.getTestCameras()) > 0):
+                print("export rendered testing images ...")
+                os.makedirs(test_dir, exist_ok=True)
+                gaussExtractor.reconstruction(scene.getTestCameras())
+                gaussExtractor.export_image(test_dir)
             
-            o3d.io.write_triangle_mesh(os.path.join(train_dir, name), mesh)
-            print("mesh saved at {}".format(os.path.join(train_dir, name)))
-            # post-process the mesh and save, saving the largest N clusters
-            mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
-            o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
-            print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
 
-    # np.save("/home/renbowen/covariance_hist.npy", cov_hist)
+            if args.render_path:
+                print("render videos ...")
+                traj_dir = os.path.join(args.model_path, 'traj', "ours_{}".format(scene.loaded_iter))
+                os.makedirs(traj_dir, exist_ok=True)
+                n_fames = 240
+                cam_traj = generate_path(scene.getTrainCameras(), n_frames=n_fames)
+                gaussExtractor.reconstruction(cam_traj)
+                gaussExtractor.export_image(traj_dir)
+                create_videos(base_dir=traj_dir,
+                            input_dir=traj_dir, 
+                            out_name='render_traj', 
+                            num_frames=n_fames)
+        
+            if False:
+            # if not args.skip_mesh:
+                print("export mesh ...")
+                os.makedirs(train_dir, exist_ok=True)
+                # set the active_sh to 0 to export only diffuse texture
+                gaussExtractor.gaussians.active_sh_degree = 0
+                gaussExtractor.reconstruction(scene.getTrainCameras())
+                # extract the mesh and save
+                if args.unbounded:
+                    name = 'fuse_unbounded.ply'
+                    mesh = gaussExtractor.extract_mesh_unbounded(resolution=args.mesh_res)
+                else:
+                    name = 'fuse.ply'
+                    depth_trunc = (gaussExtractor.radius * 2.0) if args.depth_trunc < 0  else args.depth_trunc
+                    voxel_size = (depth_trunc / args.mesh_res) if args.voxel_size < 0 else args.voxel_size
+                    sdf_trunc = 5.0 * voxel_size if args.sdf_trunc < 0 else args.sdf_trunc
+                    mesh = gaussExtractor.extract_mesh_bounded(voxel_size=voxel_size, sdf_trunc=sdf_trunc, depth_trunc=depth_trunc)
+                
+                o3d.io.write_triangle_mesh(os.path.join(train_dir, name), mesh)
+                print("mesh saved at {}".format(os.path.join(train_dir, name)))
+                # post-process the mesh and save, saving the largest N clusters
+                mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
+                o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
+                print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
+
+        # np.save("/home/renbowen/covariance_hist.npy", cov_hist)

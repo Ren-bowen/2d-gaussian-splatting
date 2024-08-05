@@ -14,6 +14,7 @@ import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim, loss_cls_3d
 from gaussian_renderer import render, network_gui
+from os import makedirs
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
@@ -24,23 +25,51 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import wandb
 import json
+import torchvision
+from sklearn.decomposition import PCA
+from PIL import Image
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
 
+def feature_to_rgb(features_gpu):
+    # Input features shape: (16, H, W)
+    
+    # Reshape features for PCA
+    features = features_gpu.detach().cpu()
+    print("features_gpu.device: ", features_gpu.device)
+    H, W = features.shape[1], features.shape[2]
+    features_reshaped = features.view(features.shape[0], -1).T
+
+    # Apply PCA and get the first 3 components
+    pca = PCA(n_components=3)
+    pca_result = pca.fit_transform(features_reshaped.numpy())
+
+    # Reshape back to (H, W, 3)
+    pca_result = pca_result.reshape(H, W, 3)
+
+    # Normalize to [0, 255]
+    pca_normalized = 255 * (pca_result - pca_result.min()) / (pca_result.max() - pca_result.min())
+
+    rgb_array = pca_normalized.astype('uint8')
+
+    return rgb_array
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, use_wandb):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
+    print("rotation: ", gaussians.get_rotation)
     gaussians.training_setup(opt)
     num_classes = dataset.num_classes
     print("Num classes: ",num_classes)
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
-    cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
+    cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=1e-4)
     classifier.cuda()
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -74,9 +103,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         
+        # print("rotation: ", gaussians.get_rotation)
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         torch.cuda.synchronize()
         image, viewspace_point_tensor, visibility_filter, radii, objects = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["render_object"]
+        test_dir = "C:\\ren\code\\2d-gaussian-splatting\\test\\input"
+        makedirs(test_dir, exist_ok=True)
+        if (iteration % 10 == 0):        
+            rgb_mask = feature_to_rgb(objects)
+            Image.fromarray(rgb_mask).save(os.path.join(test_dir, '{0:05d}'.format(iteration) + ".png"))
+        # print("viewspace_point_tensor.norm: ", torch.norm(viewspace_point_tensor.grad[visibility_filter], dim=-1, keepdim=True))
         torch.cuda.synchronize()
         # Object Loss
         gt_obj = viewpoint_cam.objects.cuda().long()
@@ -87,15 +123,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss_obj_3d = None
+        # check nan
+        assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+        assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+        assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+        assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+        assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+        assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+        assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+        assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+        assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+        assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
+
         if iteration % opt.reg3d_interval == 0:
             # regularize at certain intervals
             logits3d = classifier(gaussians._objects_dc.permute(2,0,1))
             prob_obj3d = torch.softmax(logits3d,dim=0).squeeze().permute(1,0)
             loss_obj_3d = loss_cls_3d(gaussians._xyz.squeeze().detach(), prob_obj3d, opt.reg3d_k, opt.reg3d_lambda_val, opt.reg3d_max_points, opt.reg3d_sample_size)
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj + loss_obj_3d
+            # print ("Ll1: ", Ll1, "Loss_obj: ", loss_obj, "Loss_obj_3d: ", loss_obj_3d)
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj * 1 + loss_obj_3d * 1
         else:
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj
+            # print ("Ll1: ", Ll1, "Loss_obj: ", loss_obj)
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj * 1
    
+        assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+        assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+        assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+        assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+        assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+        assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+        assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+        assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+        assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+        assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
+
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
         lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
@@ -109,11 +170,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # loss
         total_loss = loss + dist_loss + normal_loss
-        
         total_loss.backward()
-
+        # print("viewspace_point_tensor.norm: ", torch.norm(viewspace_point_tensor.grad[visibility_filter], dim=-1, keepdim=True))
         iter_end.record()
-
+        assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+        assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+        assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+        assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+        assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+        assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+        assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+        assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+        assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+        assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -131,6 +200,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.set_postfix(loss_dict)
 
                 progress_bar.update(10)
+            assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+            assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+            assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+            assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+            assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+            assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+            assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+            assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+            assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+            assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
             if iteration == opt.iterations:
                 progress_bar.close()
 
@@ -143,12 +222,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                torch.save(classifier.state_dict(), os.path.join(scene.model_path, "point_cloud/iteration_{}".format(iteration),'classifier.pth'))
 
-
+            assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
             # Densification
             if iteration < opt.densify_until_iter:
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+                # print("viewspace_point_tensor.norm: ", torch.norm(viewspace_point_tensor.grad[visibility_filter], dim=-1, keepdim=True))
+                assert not torch.isnan(viewspace_point_tensor.grad[visibility_filter]).any(), "viewspace_point_tensor is nan"
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
@@ -159,8 +243,43 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Optimizer step
             if iteration < opt.iterations:
+                max_norm = 1.0
+                torch.nn.utils.clip_grad_norm_(gaussians._xyz, max_norm, norm_type=2)
+                assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+                assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+                assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+                assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+                assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+                assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+                assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+                assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+                assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+                assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+                assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+                assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+                assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+                assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+                assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+                assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+                assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+                assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+                assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
+                cls_optimizer.step()
+                cls_optimizer.zero_grad()
+                assert not torch.isnan(Ll1).any(), "L1 loss is nan"
+                assert not torch.isnan(loss_obj).any(), "Object loss is nan"
+                assert not torch.isnan(gaussians._xyz).any(), "XYZ is nan"
+                assert not torch.isnan(gaussians._objects_dc).any(), "Objects is nan"
+                assert not torch.isnan(gaussians._features_dc).any(), "Features is nan"
+                assert not torch.isnan(gaussians._opacity).any(), "Opacity is nan"
+                assert not torch.isnan(gaussians.max_radii2D).any(), "Radii is nan"
+                assert not torch.isnan(gaussians._scaling).any(), "SH is nan"
+                assert not torch.isnan(gaussians.xyz_gradient_accum).any(), "SH weights is nan"
+                assert not torch.isnan(gaussians._rotation).any(), "SH offsets is nan"
+
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -266,8 +385,8 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1_000, 7_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000, 7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)

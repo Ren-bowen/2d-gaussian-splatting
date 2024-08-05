@@ -217,7 +217,7 @@ class GaussianModel:
 
     def removal_setup(self, training_args, mask3d):
 
-        mask3d = ~mask3d.bool().squeeze()
+        mask3d = mask3d.bool().squeeze()
 
         # Extracting subsets using the mask
         xyz_sub = self._xyz[mask3d].detach()
@@ -599,5 +599,6 @@ class GaussianModel:
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
+        assert not torch.isnan(viewspace_point_tensor.grad[update_filter]).any()
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter], dim=-1, keepdim=True)
         self.denom[update_filter] += 1

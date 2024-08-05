@@ -94,7 +94,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             sh_objs = pc.get_objects
     else:
         colors_precomp = override_color
-    
+    assert not torch.isnan(sh_objs.any())
     rendered_image, radii, allmap, rendered_objects = rasterizer(
         means3D = means3D,
         means2D = means2D,
@@ -109,8 +109,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    print(radii.size())
-    print(radii.dtype)
+    # print(radii.size())
+    # print(radii.dtype)
     if not radii.is_cuda:
         print("radii is not cuda")
         radii = radii.to('cuda')
@@ -121,7 +121,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             "visibility_filter" : radii > 0,
             "radii": radii,
             "render_object": rendered_objects}
-    print("rets", len(rets))
+    # print("rets", len(rets))
     torch.cuda.synchronize()
 
     # additional regularizations
