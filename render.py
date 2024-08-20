@@ -20,12 +20,12 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
-from utils.rotate_sh import RotateSH
+from utils.rotate_sh import RotateSH, rotation_matrix_to_quaternion, quaternion_multiply
 import taichi as ti
 import numpy as np
 
 import open3d as o3d
-def quaternion_to_rotation_matrix(quaternion):
+def quaternion_to_rotation_matrix(q):
     """
     Convert a quaternion to a 3x3 rotation matrix.
     
@@ -35,7 +35,7 @@ def quaternion_to_rotation_matrix(quaternion):
     Returns:
         torch.Tensor: A tensor of shape (3, 3) representing the rotation matrix.
     """
-    w, x, y, z = quaternion
+    w, x, y, z = q
     ww, xx, yy, zz = w*w, x*x, y*y, z*z
     wx, wy, wz = w*x, w*y, w*z
     xy, xz, yz = x*y, x*z, y*z
@@ -48,6 +48,7 @@ def quaternion_to_rotation_matrix(quaternion):
     
     return rotation_matrix
 
+'''
 def multiplt_quaternian(q1, q2):
     # input: pytorch tensor of shape (n, 4)
     # output: pytorch tensor of shape (n, 4)
@@ -58,25 +59,7 @@ def multiplt_quaternian(q1, q2):
     y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
     z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
     return torch.stack([w, x, y, z], dim=1)
-
-
-def rotation_matrix_to_quaternion(rotation_matrix):
-    """
-    Convert a 3x3 rotation matrix to a quaternion.
-    
-    Args:
-        rotation_matrix (torch.Tensor): A tensor of shape (3, 3) representing the rotation matrix.
-
-    Returns:
-        torch.Tensor: A tensor of shape (4,) representing the quaternion (w, x, y, z).
-    """
-    trace = rotation_matrix[0, 0] + rotation_matrix[1, 1] + rotation_matrix[2, 2]
-    w = torch.sqrt(1 + trace) / 2
-    x = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / (4*w)
-    y = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / (4*w)
-    z = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / (4*w)
-    
-    return torch.tensor([w, x, y, z])
+'''
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -98,118 +81,64 @@ if __name__ == "__main__":
     print("Rendering " + args.model_path)
 
     dataset, iteration, pipe = model.extract(args), args.iteration, pipeline.extract(args)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
-    gaussians_xyz_np = gaussians._xyz.cpu().detach().numpy()
-    gaussians_rotation_np = np.zeros((gaussians._rotation.shape[0], 3, 3))
-    print("len(gaussians._xyz): ", gaussians._xyz.shape)
-    
     new_gaussians = GaussianModel(dataset.sh_degree)
-    new_xyz = []
-    new_features_dc = []
-    new_features_rest = []
-    new_opacity = []
-    new_scaling = []
-    new_rotation = []
+    print("iteration: ", iteration)
+    scene = Scene(dataset, new_gaussians, load_iteration=iteration, shuffle=False)
 
-    p1 = np.array([-4.451480, 0.974875, 5.581665])
-    p2 = np.array([-1.992872, -0.037731, 6.155551])
-    p3 = np.array([-0.514574, 2.460062, 4.277073])
-    p4 = np.array([-2.974283, 3.445327, 3.594432])
-    paper1 = np.load(r"C:\ren\code\2d-gaussian-splatting\output\input\regular.npy")
-    # paper1 = np.zeros(gaussians._xyz.shape[0])
-    normal = np.cross(p2 - p1, p3 - p1)
-    normal = normal / np.linalg.norm(normal)
-    print("gaussians._features_dc.shape: ", gaussians._features_dc.shape)
-    print("gaussians._features_rest.shape: ", gaussians._features_rest.shape)
-    for i in range(0, gaussians._xyz.shape[0]):
-        p = gaussians._xyz[i, :].cpu().detach().numpy()
-        # if (p - p1).dot(p2 - p1) > 0 and (p - p2).dot(p1 - p2) > 0 and (p - p3).dot(p4 - p3) > 0 and (p - p4).dot(p3 - p4) > 0 and (p - p2).dot(p3 - p2) > 0 and (p - p3).dot(p2 - p3) > 0 and (p - p1).dot(p4 - p1) > 0 and (p - p4).dot(p1 - p4) > 0:
-        #     if (np.abs((p - p1).dot(normal)) < 0.14):
-        if(np.abs(paper1[i] - 1) < 0.1):
-                new_xyz.append(gaussians._xyz[i, :])
-                new_features_dc.append(gaussians._features_dc[i, :, :])
-                new_features_rest.append(gaussians._features_rest[i, :, :])
-                new_opacity.append(gaussians._opacity[i, :])
-                new_scaling.append(gaussians._scaling[i, :])
-                new_rotation.append(gaussians._rotation[i, :])
-                paper1[i] = 1
-    
-    # np.save(r"C:\ren\code\2d-gaussian-splatting\output\input\regular", paper1)
-    new_xyz = torch.stack(new_xyz, dim=0)
-    new_features_dc = torch.stack(new_features_dc, dim=0)
-    new_features_rest = torch.stack(new_features_rest, dim=0)
-    new_opacity = torch.stack(new_opacity, dim=0)
-    new_scaling = torch.stack(new_scaling, dim=0)
-    new_rotation = torch.stack(new_rotation, dim=0)
-    new_xyz = new_xyz.to(dtype=torch.float32, device="cuda")
-    new_features_dc = new_features_dc.to(dtype=torch.float32, device="cuda")
-    new_features_rest = new_features_rest.to(dtype=torch.float32, device="cuda")
-    new_opacity = new_opacity.to(dtype=torch.float32, device="cuda")
-    new_scaling = new_scaling.to(dtype=torch.float32, device="cuda")
-    new_rotation = new_rotation.to(dtype=torch.float32, device="cuda")
-
-    # np.save(r"C:\Users\bowen ren\Desktop\gaussian_xyz_regular", np.array(new_xyz.cpu().detach().numpy()))
-    new_rotation_ = build_rotation(new_rotation)
-    # np.save(r"C:\Users\bowen ren\Desktop\gaussian_rotation_regular", np.array(new_rotation_.cpu().detach().numpy()))
-    new_scaling = torch.cat([new_scaling, torch.ones((new_scaling.shape[0], 1), device="cuda")], dim=1)
-    # np.save(r"C:\Users\bowen ren\Downloads\gaussian_scaling_regular", new_scaling.cpu().detach().numpy())
-    new_scaling = new_scaling[:, :2]
-
-    new_gaussians._xyz = new_xyz
-    new_gaussians._features_dc = new_features_dc
-    new_gaussians._features_rest = new_features_rest
-    new_gaussians._opacity = new_opacity
-    new_gaussians._scaling = new_scaling
-    new_gaussians._rotation = new_rotation
-    new_gaussians.active_sh_degree = gaussians.max_sh_degree
-    print("gaussians._xyz.shape: ", gaussians._xyz.shape)
+    file_path = r"C:\ren\code\2d-gaussian-splatting\output\regular\iter_30000"
+    if not os.path.exists(file_path + "/new_gaussians_xyz.npy"):
+        np.save(file_path + "/new_gaussians_xyz.npy", new_gaussians._xyz.cpu().detach().numpy())
+    new_scaling = torch.cat([new_gaussians._scaling, torch.ones((new_gaussians._scaling.shape[0], 1), device="cuda")], dim=1)
+    if not os.path.exists(file_path + "/new_gaussians_scaling.npy"):
+        np.save(file_path + "/new_gaussians_scaling.npy", new_scaling.cpu().detach().numpy())
     print("new_gaussians._xyz.shape: ", new_gaussians._xyz.shape)
     bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
     # bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    new_gaussians_xyz_np_list = np.load(r"C:\ren\code\2d-gaussian-splatting\data\gaussian_xyz_list_paper2_rot.npy")
-    new_gaussians_rotation_np_list = np.load(r"C:\ren\code\2d-gaussian-splatting\data\gaussian_rotation_list_paper2_rot.npy")
-    new_gaussians_scaling_np_list = np.load(r"C:\ren\code\2d-gaussian-splatting\data\gaussian_scaling_list_paper2_rot.npy")
-    mean_xyz = torch.mean(gaussians._xyz, axis=0)
-    for i in range(20, 200, 10):
+    new_gaussians_xyz_np_list = np.load(os.path.join(file_path, "gaussian_xyz_list_rot.npy"))
+    F_np_list = np.load(os.path.join(file_path, "rotation_list_rot.npy"))
+    new_gaussians_scaling_np_list = np.load(os.path.join(file_path, "gaussian_scaling_list_rot.npy"))
+    mean_xyz = torch.mean(new_gaussians._xyz, axis=0)
+    num_gaussians = new_gaussians._xyz.shape[0]
+    
+    for i in range(0, 40, 1):
         print("i: ", i)
-        new_gaussians._xyz = torch.from_numpy(new_gaussians_xyz_np_list[i]).to(dtype=torch.float32, device="cuda")
-        new_gaussians_rotation_np = new_gaussians_rotation_np_list[i]
-        new_gaussians_rotation = np.zeros((new_gaussians_rotation_np.shape[0], 4))
-        ti.init(arch = 'cuda')
-        @ti.kernel
-        def RotateSHs(rotation: ti.types.matrix(3, 3, float), features: ti.types.matrix(16, 3, float)) -> ti.types.matrix(16, 3, float):
-            return RotateSH(rotation, features)
-        for j in range(0, new_gaussians_rotation_np.shape[0]):
-            new_gaussians_rotation[j] = rotation_matrix_to_quaternion(torch.from_numpy(new_gaussians_rotation_np[j]).to(dtype=torch.float32, device="cuda"))
-            rotation_matrix = (torch.from_numpy(new_gaussians_rotation_np[j]) @ quaternion_to_rotation_matrix(new_gaussians._rotation[j]).T).to(dtype=torch.float32, device="cuda")
-            new_gaussians_features_rest = torch.cat((new_gaussians._features_rest[j], torch.zeros(1, 3).to(dtype=torch.float32, device="cuda")), dim=0)
-            Matrix_3x3 = ti.types.matrix(3, 3, float)
-            rotation_matrix_ti = Matrix_3x3(rotation_matrix.cpu().detach().numpy().tolist())
-            Matrix_16x3 = ti.types.matrix(16, 3, float)
-            new_gaussians_features_rest_ti = Matrix_16x3(new_gaussians_features_rest.cpu().detach().numpy().tolist())
-            new_gaussians_features_rest_ti = RotateSHs(rotation_matrix_ti, new_gaussians_features_rest_ti)
-            new_gaussians_features_rest = torch.tensor(new_gaussians_features_rest_ti.to_numpy()).to(dtype=torch.float32, device="cuda")
-            new_gaussians._features_rest[j] = new_gaussians_features_rest[:15, :]
-
-
-
-        new_gaussians_rotation = torch.from_numpy(new_gaussians_rotation).to(dtype=torch.float32, device="cuda")
-        # print("new_gaussians_rotation: ", new_gaussians_rotation[0])
-        # print("new_gaussians._rotation: ", new_gaussians._rotation[0])
-        # print("new_gaussians_rotation: ", new_gaussians_rotation[0] @ new_gaussians._rotation[0].T)
-        new_gaussians._rotation = new_gaussians_rotation
-        # new_gaussians._scaling = torch.from_numpy(new_gaussians_scaling_np_list[i][:, :2]).to(dtype=torch.float32, device="cuda")
         # as xyz_mean to be center, rotation 20 degree around z axis
-        # rotation_matrix = torch.tensor([[np.cos(20 * np.pi / 180), -np.sin(20 * np.pi / 180), 0],
-        #                                 [np.sin(20 * np.pi / 180), np.cos(20 * np.pi / 180), 0],
-        #                                 [0, 0, 1]]).to(dtype=torch.float32, device="cuda")
-        # new_gaussians._xyz = (new_gaussians._xyz - mean_xyz) @ rotation_matrix.T + mean_xyz
-        # new_gaussians._rotation = multiplt_quaternian(new_gaussians._rotation, rotation_matrix_to_quaternion(rotation_matrix.to(dtype=torch.float32, device="cuda")))
+        rotation_matrix = np.array([[np.cos(20 * np.pi / 180), -np.sin(20 * np.pi / 180), 0],
+                                        [np.sin(20 * np.pi / 180), np.cos(20 * np.pi / 180), 0],
+                                        [0, 0, 1]])
+        # new_gaussians._xyz = (new_gaussians._xyz - mean_xyz) @ (torch.from_numpy(rotation_matrix).to(dtype=torch.float32, device="cuda")).T + mean_xyz
+        new_gaussians._xyz = torch.from_numpy(new_gaussians_xyz_np_list[i]).to(dtype=torch.float32, device="cuda")
+        # repeat the rotation matrix for all gaussians
+        rotation_matrix = np.repeat(rotation_matrix.reshape(1, 3, 3), num_gaussians, axis=0)
+        F_np = F_np_list[i]
+        # F_np = rotation_matrix
+        new_gaussians_rotation = np.zeros((num_gaussians, 4))
+        ti.init(arch = ti.gpu)
+        @ti.kernel
+        def Do_Rotate(rotation_matrixs: ti.types.ndarray(ndim=1), rotations: ti.types.ndarray(ndim=1), features: ti.types.ndarray(ndim=1)):
+            print("rotation_matrixs[0]: ", rotation_matrixs[0])
+            print("rotation_matrix_to_quaternion(rotation_matrixs[0]): ", rotation_matrix_to_quaternion(rotation_matrixs[0]))
+            for i in range(features.shape[0]):
+                rotation_matrix = rotation_matrixs[i]
+                rotation_quaternion = rotation_matrix_to_quaternion(rotation_matrix)
+                rotations[i] = quaternion_multiply(rotation_quaternion, rotations[i])
+                features[i] = RotateSH(rotation_matrix, features[i])
+        rotation_ti = ti.Matrix.ndarray(3, 3, ti.f32, shape=(num_gaussians))
+        rotation_ti.from_numpy(F_np)
+        new_gaussians_rotation_ti = ti.Vector.ndarray(4, ti.f32, shape=(num_gaussians))
+        new_gaussians_rotation_ti.from_numpy(new_gaussians._rotation.cpu().detach().numpy())
+        new_gaussians_features_rest_ti = ti.Matrix.ndarray(16, 3, ti.f32, shape=(num_gaussians))
+        new_gaussians_features_rest_ti.from_numpy(torch.cat((new_gaussians._features_rest.cpu().detach(), torch.zeros(num_gaussians, 1, 3)), dim=1).numpy())
+        Do_Rotate(rotation_ti, new_gaussians_rotation_ti, new_gaussians_features_rest_ti)
+        # print("new_gaussians_rotation_ti[0]: ", new_gaussians_rotation_ti[0])
+        # print("quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())): ", quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())))
+        # rotation_matrix_trans = quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())).to(dtype=torch.float32, device="cuda") @ (quaternion_to_rotation_matrix(new_gaussians._rotation[0]).T).to(dtype=torch.float32, device="cuda")
+        # print("rotation_matrix_trans: ", rotation_matrix_trans)
+        new_gaussians._rotation = torch.from_numpy(new_gaussians_rotation_ti.to_numpy()).to(dtype=torch.float32, device="cuda")
+        new_gaussians._features_rest = torch.from_numpy(new_gaussians_features_rest_ti.to_numpy()).to(dtype=torch.float32, device="cuda")[:, :15, :]
 
-
-        train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}".format(scene.loaded_iter, i))
+        train_dir = os.path.join(args.model_path, 'train', "ours_{}_{}_rot_".format(scene.loaded_iter, i))
         test_dir = os.path.join(args.model_path, 'test', "ours_{}".format(scene.loaded_iter))
         gaussExtractor = GaussianExtractor(new_gaussians, render, pipe, bg_color=bg_color)    
 

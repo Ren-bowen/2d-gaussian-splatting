@@ -72,3 +72,43 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
+def surfel_loss(covariances, k=500, lambda_val=2.0, max_points=200000, sample_size=2000):
+    """
+    Compute the neighborhood consistency loss for a 3D point cloud using Top-k neighbors
+    and the KL divergence.
+    
+    :param positions: Tensor of shape (N, D), where N is the number of points and D is the dimensionality of the feature.
+    :param normals: Tensor of shape (N, C), where C is the number of classes.
+    :param k: Number of neighbors to consider.
+    :param lambda_val: Weighting factor for the loss.
+    :param max_points: Maximum number of points for downsampling. If the number of points exceeds this, they are randomly downsampled.
+    :param sample_size: Number of points to randomly sample for computing the loss.
+    
+    :return: Computed loss value.
+    """
+    # Conditionally downsample if points exceed max_points
+    positions = covariances[:, 3, :3]
+    normals = covariances[:, 0, :3].cross(covariances[:, 1, :3])
+    normals = normals / normals.norm(dim=1, keepdim=True)
+    if positions.size(0) > max_points:
+        indices = torch.randperm(positions.size(0))[:max_points]
+        positions = positions[indices]
+        normals = normals[indices]
+
+
+    # Randomly sample points for which we'll compute the loss
+    # indices = torch.randperm(positions.size(0))[:sample_size]
+    sample_positions = positions
+    sample_normals = normals
+
+    # Compute top-k nearest neighbors directly in PyTorch
+
+    # Fetch neighbor normals using indexing
+    # neighbor_normals = normals[neighbor_indices_tensor]
+    # neighbor_positions = positions[neighbor_indices_tensor]
+
+    # Compute KL divergence
+    # normal_loss = (neighbor_normals - sample_normals.unsqueeze(1)).norm(dim=-1).mean()
+    surface_loss = (torch.abs((positions - sample_positions.unsqueeze(1)) * sample_normals.unsqueeze(1))).sum(dim=-1).mean()
+
+    return surface_loss
