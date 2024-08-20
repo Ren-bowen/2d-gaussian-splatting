@@ -12,7 +12,7 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, surfel_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -32,14 +32,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians)
-    gaussians.training_setup(opt)
+    scene = Scene(dataset, gaussians, load_iteration=0)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+    print("gaussians._xyz.shape",gaussians._xyz.shape)
+    gaussians.training_setup(opt)
+    gaussians.max_radii2D = torch.zeros((gaussians.get_xyz.shape[0]), device="cuda")
+    # print("gaussians.max_radii2D.shape",gaussians.max_radii2D.shape)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    # bg_color = [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    print("Background color: ", background)
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -84,30 +89,39 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         normal_loss = lambda_normal * (normal_error).mean()
         dist_loss = lambda_dist * (rend_dist).mean()
 
-
         Sp=gaussians.get_scaling
         r = 2
         Laniso = torch.mean(torch.maximum(torch.max(Sp, dim=1)[0] / torch.min(Sp, dim=1)[0], torch.tensor(r)) - r)
-        lambda_aniso = 10
+        lambda_aniso = 50
 
         # 新增的体积比损失
-        volumes = torch.prod(Sp, dim=1) # 计算每个高斯的体积
-        sorted_indices = torch.argsort(volumes, descending=True) # 按体积降序排序
+        # print("Sp.shape",Sp.shape)
+        volumes = torch.prod(Sp, dim=1) # 计算每个高斯的面积
+        sorted_indices = torch.argsort(volumes, descending=True) # 按面积降序排序
         alpha = 0.3 # ratio of top and bottom
         n = len(volumes)
         top_k = int(n * alpha)
-        
+
+        # surface_loss = surfel_loss(gaussians.get_covariance().squeeze())
+        # surface_loss = 0
         top_mean_volume = torch.mean(volumes[sorted_indices[:top_k]])
         with torch.no_grad():
             bottom_mean_volume = torch.mean(volumes[sorted_indices[-top_k:]])
 
-        min_volum_ratio = 8.0
+        min_volum_ratio = 4.0
         Lvol_ratio = torch.max(top_mean_volume / bottom_mean_volume, torch.tensor(min_volum_ratio))-min_volum_ratio
-        lambda_vol_ratio = 0.02 
+        lambda_vol_ratio = 0.05
 
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
+        regular_loss = lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         # loss
-        total_loss = loss + dist_loss + normal_loss
+        # total_loss = loss + dist_loss + normal_loss + normal_loss1 * 3 + surface_loss * 3 + regular_loss
+        total_loss = loss + regular_loss + normal_loss
+        if (iteration % 100 == 0):
+            
+            print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
+            print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item())
+            # print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
         
         total_loss.backward()
 
@@ -139,9 +153,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
 
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
-            if (iteration in saving_iterations):
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
 
 
             # Densification
@@ -164,6 +175,49 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+            
+            if iteration == -1:
+                num = 0
+                diff_min = 0
+                for i in range(gaussians.get_xyz.shape[0]):
+                    mask = torch.zeros((n, 1, 3), dtype=bool)
+                    mask[i][:][:] = True 
+                    gaussians_new = GaussianModel(dataset.sh_degree)
+                    gaussians_new._xyz = torch.cat([gaussians._xyz[:i], gaussians._xyz[i+1:]], dim=0)
+                    gaussians_new._opacity = torch.cat([gaussians._opacity[:i], gaussians._opacity[i+1:]], dim=0)
+                    gaussians_new._scaling = torch.cat([gaussians._scaling[:i], gaussians._scaling[i+1:]], dim=0)
+                    gaussians_new._rotation = torch.cat([gaussians._rotation[:i], gaussians._rotation[i+1:]], dim=0)
+                    gaussians_new._features_dc = torch.cat([gaussians._features_dc[:i], gaussians._features_dc[i+1:]], dim=0)
+                    gaussians_new._features_rest = torch.cat([gaussians._features_rest[:i], gaussians._features_rest[i+1:]], dim=0)
+                    loss_diff = 0
+                    for j in range(len(viewpoint_stack)):
+                        viewpoint_cam = viewpoint_stack[j]
+            
+                        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+                        render_pkg_new = render(viewpoint_cam, gaussians_new, pipe, background)
+                        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                        image_new, viewspace_point_tensor_new, visibility_filter_new, radii_new = render_pkg_new["render"], render_pkg_new["viewspace_points"], render_pkg_new["visibility_filter"], render_pkg_new["radii"]
+
+                        gt_image = viewpoint_cam.original_image.cuda()
+                        Ll1 = l1_loss(image, gt_image)
+                        Ll1_new = l1_loss(image_new, gt_image)
+                        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+                        loss_new = (1.0 - opt.lambda_dssim) * Ll1_new + opt.lambda_dssim * (1.0 - ssim(image_new, gt_image))
+                        loss_diff += loss_new - loss
+                    print("i: ", i, "loss_diff: ", loss_diff)
+                    if loss_diff > diff_min:
+                        diff_min = loss_diff
+                    if loss_diff < 0.002:
+                        gaussians._opacity[i] = -1000
+                        num += 1
+                print("diff_min: ", diff_min)
+                print("prune points: ", num)
+                size_threshold = 20 
+                gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+            
+            if (iteration in saving_iterations):
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -256,8 +310,8 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 15_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
