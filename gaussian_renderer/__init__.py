@@ -105,6 +105,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         cov3D_precomp = cov3D_precomp
     )
     
+    # print("Rendered image shape: ", rendered_image.shape)
+
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     rets =  {"render": rendered_image,
@@ -145,7 +147,29 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     surf_normal = surf_normal.permute(2,0,1)
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alpha).detach()
+    '''
+    mask = (rendered_image[0] < 0.01) & (rendered_image[1] < 0.01) & (rendered_image[2] < 0.01)
+    surf_normal[0] = surf_normal[0] * mask
+    surf_normal[1] = surf_normal[1] * mask
+    surf_normal[2] = surf_normal[2] * mask
+    render_normal[0] = render_normal[0] * mask
+    render_normal[1] = render_normal[1] * mask
+    render_normal[2] = render_normal[2] * mask
 
+    
+    num = 0
+    for i in range(rendered_image.shape[1]):
+        for j in range(rendered_image.shape[2]):
+            if rendered_image[0][i][j] < 0.01 and rendered_image[1][i][j] < 0.01 and rendered_image[2][i][j] > 0.01:
+                surf_normal[0][i][j] = 0
+                surf_normal[1][i][j] = 0
+                surf_normal[2][i][j] = 0
+                render_normal[0][i][j] = 0
+                render_normal[1][i][j] = 0
+                render_normal[2][i][j] = 0
+                num += 1
+    print("num: ", num)
+    '''
 
     rets.update({
             'rend_alpha': render_alpha,
