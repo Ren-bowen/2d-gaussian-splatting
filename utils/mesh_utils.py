@@ -24,16 +24,26 @@ def post_process_mesh(mesh, cluster_to_keep=1000):
     Post-process a mesh to filter out floaters and disconnected parts
     """
     import copy
-    print("post processing the mesh to have {} clusterscluster_to_kep".format(cluster_to_keep))
+    import numpy as np
+    import open3d as o3d
+
+    print("post processing the mesh to have {} clusters".format(cluster_to_keep))
     mesh_0 = copy.deepcopy(mesh)
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
-            triangle_clusters, cluster_n_triangles, cluster_area = (mesh_0.cluster_connected_triangles())
+        triangle_clusters, cluster_n_triangles, cluster_area = mesh_0.cluster_connected_triangles()
 
     triangle_clusters = np.asarray(triangle_clusters)
     cluster_n_triangles = np.asarray(cluster_n_triangles)
     cluster_area = np.asarray(cluster_area)
+
+    # Ensure cluster_to_keep does not exceed the number of clusters
+    if len(cluster_n_triangles) < cluster_to_keep:
+        print(f"Warning: cluster_to_keep ({cluster_to_keep}) is greater than the number of clusters ({len(cluster_n_triangles)}). Reducing cluster_to_keep to {len(cluster_n_triangles)}.")
+        cluster_to_keep = len(cluster_n_triangles)
+
     n_cluster = np.sort(cluster_n_triangles.copy())[-cluster_to_keep]
-    n_cluster = max(n_cluster, 50) # filter meshes smaller than 50
+    n_cluster = max(n_cluster, 50)  # filter meshes smaller than 50
+
     triangles_to_remove = cluster_n_triangles[triangle_clusters] < n_cluster
     mesh_0.remove_triangles_by_mask(triangles_to_remove)
     mesh_0.remove_unreferenced_vertices()
@@ -274,6 +284,7 @@ class GaussianExtractor(object):
         torch.cuda.empty_cache()
         mesh = mesh.as_open3d
         print("texturing mesh ... ")
+        print(voxel_size)
         _, rgbs = compute_unbounded_tsdf(torch.tensor(np.asarray(mesh.vertices)).float().cuda(), inv_contraction=None, voxel_size=voxel_size, return_rgb=True)
         mesh.vertex_colors = o3d.utility.Vector3dVector(rgbs.cpu().numpy())
         return mesh
@@ -287,9 +298,9 @@ class GaussianExtractor(object):
         os.makedirs(vis_path, exist_ok=True)
         os.makedirs(gts_path, exist_ok=True)
         for idx, viewpoint_cam in tqdm(enumerate(self.viewpoint_stack), desc="export images"):
-            gt = viewpoint_cam.original_image[0:3, :, :]
-            save_img_u8(gt.permute(1,2,0).cpu().numpy(), os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+            # gt = viewpoint_cam.original_image[0:3, :, :]
+            # save_img_u8(gt.permute(1,2,0).cpu().numpy(), os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
             save_img_u8(self.rgbmaps[idx].permute(1,2,0).cpu().numpy(), os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-            save_img_f32(self.depthmaps[idx][0].cpu().numpy(), os.path.join(vis_path, 'depth_{0:05d}'.format(idx) + ".tiff"))
+            # save_img_f32(self.depthmaps[idx][0].cpu().numpy(), os.path.join(vis_path, 'depth_{0:05d}'.format(idx) + ".tiff"))
             # save_img_u8(self.normals[idx].permute(1,2,0).cpu().numpy() * 0.5 + 0.5, os.path.join(vis_path, 'normal_{0:05d}'.format(idx) + ".png"))
-            # save_img_u8(self.depth_normals[idx].permute(1,2,0).cpu().numpy() * 0.5 + 0.5, os.path.join(vis_path, 'depth_normal_{0:05d}'.format(idx) + ".png"))
+            save_img_u8(self.depth_normals[idx].permute(1,2,0).cpu().numpy() * 0.5 + 0.5, os.path.join(vis_path, 'depth_normal_{0:05d}'.format(idx) + ".png"))

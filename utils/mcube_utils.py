@@ -24,6 +24,7 @@ def marching_cubes_with_contraction(
     simplify_mesh=True,
     inv_contraction=None,
     max_range=32.0,
+    smoothing_iterations=5,
 ):
     assert resolution % 512 == 0
 
@@ -87,9 +88,13 @@ def marching_cubes_with_contraction(
     combined = trimesh.util.concatenate(meshes)
     combined.merge_vertices(digits_vertex=6)
 
-    # inverse contraction and clipping the points range
+    # Smoothing the mesh to avoid skinny triangles
+    if smoothing_iterations > 0:
+        combined = combined.simplify_quadratic_decimation(smoothing_iterations)
+
+    # Inverse contraction and clipping the points range
     if inv_contraction is not None:
         combined.vertices = inv_contraction(torch.from_numpy(combined.vertices).float().cuda()).cpu().numpy()
         combined.vertices = np.clip(combined.vertices, -max_range, max_range)
-    
+
     return combined
