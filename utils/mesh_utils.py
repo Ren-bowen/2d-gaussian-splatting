@@ -55,12 +55,21 @@ def post_process_mesh(mesh, cluster_to_keep=1000):
 def to_cam_open3d(viewpoint_stack):
     camera_traj = []
     for i, viewpoint_cam in enumerate(viewpoint_stack):
-        intrinsic=o3d.camera.PinholeCameraIntrinsic(width=viewpoint_cam.image_width, 
-                    height=viewpoint_cam.image_height, 
-                    cx = viewpoint_cam.image_width/2,
-                    cy = viewpoint_cam.image_height/2,
-                    fx = viewpoint_cam.image_width / (2 * math.tan(viewpoint_cam.FoVx / 2.)),
-                    fy = viewpoint_cam.image_height / (2 * math.tan(viewpoint_cam.FoVy / 2.)))
+        W = viewpoint_cam.image_width
+        H = viewpoint_cam.image_height
+        ndc2pix = torch.tensor([
+            [W / 2, 0, 0, (W-1) / 2],
+            [0, H / 2, 0, (H-1) / 2],
+            [0, 0, 0, 1]]).float().cuda().T
+        intrins =  (viewpoint_cam.projection_matrix @ ndc2pix)[:3,:3].T
+        intrinsic=o3d.camera.PinholeCameraIntrinsic(
+            width=viewpoint_cam.image_width,
+            height=viewpoint_cam.image_height,
+            cx = intrins[0,2].item(),
+            cy = intrins[1,2].item(), 
+            fx = intrins[0,0].item(), 
+            fy = intrins[1,1].item()
+        )
 
         extrinsic=np.asarray((viewpoint_cam.world_view_transform.T).cpu().numpy())
         camera = o3d.camera.PinholeCameraParameters()
@@ -91,10 +100,10 @@ class GaussianExtractor(object):
     @torch.no_grad()
     def clean(self):
         self.depthmaps = []
-        self.alphamaps = []
+        # self.alphamaps = []
         self.rgbmaps = []
-        self.normals = []
-        self.depth_normals = []
+        # self.normals = []
+        # self.depth_normals = []
         self.viewpoint_stack = []
 
     @torch.no_grad()
@@ -113,14 +122,14 @@ class GaussianExtractor(object):
             depth_normal = render_pkg['surf_normal']
             self.rgbmaps.append(rgb.cpu())
             self.depthmaps.append(depth.cpu())
-            self.alphamaps.append(alpha.cpu())
-            self.normals.append(normal.cpu())
-            self.depth_normals.append(depth_normal.cpu())
+            # self.alphamaps.append(alpha.cpu())
+            # self.normals.append(normal.cpu())
+            # self.depth_normals.append(depth_normal.cpu())
         
-        self.rgbmaps = torch.stack(self.rgbmaps, dim=0)
-        self.depthmaps = torch.stack(self.depthmaps, dim=0)
-        self.alphamaps = torch.stack(self.alphamaps, dim=0)
-        self.depth_normals = torch.stack(self.depth_normals, dim=0)
+        # self.rgbmaps = torch.stack(self.rgbmaps, dim=0)
+        # self.depthmaps = torch.stack(self.depthmaps, dim=0)
+        # self.alphamaps = torch.stack(self.alphamaps, dim=0)
+        # self.depth_normals = torch.stack(self.depth_normals, dim=0)
         self.estimate_bounding_sphere()
 
     def estimate_bounding_sphere(self):
@@ -195,7 +204,7 @@ class GaussianExtractor(object):
             mag = torch.linalg.norm(y, ord=2, dim=-1)[..., None]
             return torch.where(mag < 1, y, (1 / (2-mag) * (y/mag)))
 
-        def compute_sdf_perframe(i, points, depthmap, rgbmap, normalmap, viewpoint_cam):
+        def compute_sdf_perframe(i, points, depthmap, rgbmap, viewpoint_cam):
             """
                 compute per frame sdf
             """
@@ -205,20 +214,19 @@ class GaussianExtractor(object):
             mask_proj = ((pix_coords > -1. ) & (pix_coords < 1.) & (z > 0)).all(dim=-1)
             sampled_depth = torch.nn.functional.grid_sample(depthmap.cuda()[None], pix_coords[None, None], mode='bilinear', padding_mode='border', align_corners=True).reshape(-1, 1)
             sampled_rgb = torch.nn.functional.grid_sample(rgbmap.cuda()[None], pix_coords[None, None], mode='bilinear', padding_mode='border', align_corners=True).reshape(3,-1).T
-            sampled_normal = torch.nn.functional.grid_sample(normalmap.cuda()[None], pix_coords[None, None], mode='bilinear', padding_mode='border', align_corners=True).reshape(3,-1).T
             sdf = (sampled_depth-z)
-            return sdf, sampled_rgb, sampled_normal, mask_proj
+            return sdf, sampled_rgb, mask_proj
 
         def compute_unbounded_tsdf(samples, inv_contraction, voxel_size, return_rgb=False):
             """
                 Fusion all frames, perform adaptive sdf_funcation on the contract spaces.
             """
             if inv_contraction is not None:
-                samples = inv_contraction(samples)
                 mask = torch.linalg.norm(samples, dim=-1) > 1
                 # adaptive sdf_truncation
                 sdf_trunc = 5 * voxel_size * torch.ones_like(samples[:, 0])
                 sdf_trunc[mask] *= 1/(2-torch.linalg.norm(samples, dim=-1)[mask].clamp(max=1.9))
+                samples = inv_contraction(samples)
             else:
                 sdf_trunc = 5 * voxel_size
 
@@ -227,10 +235,9 @@ class GaussianExtractor(object):
 
             weights = torch.ones_like(samples[:,0])
             for i, viewpoint_cam in tqdm(enumerate(self.viewpoint_stack), desc="TSDF integration progress"):
-                sdf, rgb, normal, mask_proj = compute_sdf_perframe(i, samples,
+                sdf, rgb, mask_proj = compute_sdf_perframe(i, samples,
                     depthmap = self.depthmaps[i],
                     rgbmap = self.rgbmaps[i],
-                    normalmap = self.depth_normals[i],
                     viewpoint_cam=self.viewpoint_stack[i],
                 )
 
