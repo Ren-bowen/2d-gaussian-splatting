@@ -5,8 +5,6 @@ from arguments import ModelParams, PipelineParams
 from gaussian_renderer import render, network_gui
 from utils.image_utils import render_net_image
 import torch
-import subprocess
-
 
 def view(dataset, pipe, iteration):
     gaussians = GaussianModel(dataset.sh_degree)
@@ -44,7 +42,7 @@ if __name__ == "__main__":
     pp = PipelineParams(parser)
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
-    parser.add_argument('--iteration', type=int, default=7000)
+    parser.add_argument('--iteration', type=int, default=30000)
     args = parser.parse_args(sys.argv[1:])
     print("View: " + args.model_path)
     network_gui.init(args.ip, args.port)
