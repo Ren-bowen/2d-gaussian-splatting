@@ -108,9 +108,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             bottom_mean_volume = torch.mean(volumes[sorted_indices[-top_k:]])
 
-        min_volum_ratio = 4.0
+        min_volum_ratio = 9.0
         Lvol_ratio = torch.max(top_mean_volume / bottom_mean_volume, torch.tensor(min_volum_ratio))-min_volum_ratio
-        lambda_vol_ratio = 0.05
+        lambda_vol_ratio = 0.02
 
         regular_loss = lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
@@ -324,7 +324,7 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    # network_gui.init(args.ip, args.port)
+    network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint)
 

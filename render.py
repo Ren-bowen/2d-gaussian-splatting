@@ -85,7 +85,8 @@ if __name__ == "__main__":
     print("iteration: ", iteration)
     scene = Scene(dataset, new_gaussians, load_iteration=iteration, shuffle=False)
 
-    file_path = r"C:\ren\code\2d-gaussian-splatting\output\regular\iter_30000"
+    file_path = os.path.join(args.model_path, 'iter_{}'.format(iteration))
+    os.makedirs(file_path, exist_ok=True)
     if not os.path.exists(file_path + "/new_gaussians_xyz.npy"):
         np.save(file_path + "/new_gaussians_xyz.npy", new_gaussians._xyz.cpu().detach().numpy())
     new_scaling = torch.cat([new_gaussians._scaling, torch.ones((new_gaussians._scaling.shape[0], 1), device="cuda")], dim=1)
@@ -95,9 +96,9 @@ if __name__ == "__main__":
     bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
     # bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    new_gaussians_xyz_np_list = np.load(os.path.join(file_path, "gaussian_xyz_list_rot.npy"))
-    F_np_list = np.load(os.path.join(file_path, "rotation_list_rot.npy"))
-    new_gaussians_scaling_np_list = np.load(os.path.join(file_path, "gaussian_scaling_list_rot.npy"))
+    # new_gaussians_xyz_np_list = np.load(os.path.join(file_path, "gaussian_xyz_list_rot.npy"))
+    # F_np_list = np.load(os.path.join(file_path, "rotation_list_rot.npy"))
+    # new_gaussians_scaling_np_list = np.load(os.path.join(file_path, "gaussian_scaling_list_rot.npy"))
     mean_xyz = torch.mean(new_gaussians._xyz, axis=0)
     num_gaussians = new_gaussians._xyz.shape[0]
     
@@ -107,12 +108,12 @@ if __name__ == "__main__":
         rotation_matrix = np.array([[np.cos(20 * np.pi / 180), -np.sin(20 * np.pi / 180), 0],
                                         [np.sin(20 * np.pi / 180), np.cos(20 * np.pi / 180), 0],
                                         [0, 0, 1]])
-        # new_gaussians._xyz = (new_gaussians._xyz - mean_xyz) @ (torch.from_numpy(rotation_matrix).to(dtype=torch.float32, device="cuda")).T + mean_xyz
-        new_gaussians._xyz = torch.from_numpy(new_gaussians_xyz_np_list[i]).to(dtype=torch.float32, device="cuda")
+        new_gaussians._xyz = (new_gaussians._xyz - mean_xyz) @ (torch.from_numpy(rotation_matrix).to(dtype=torch.float32, device="cuda")).T + mean_xyz
+        # new_gaussians._xyz = torch.from_numpy(new_gaussians_xyz_np_list[i]).to(dtype=torch.float32, device="cuda")
         # repeat the rotation matrix for all gaussians
         rotation_matrix = np.repeat(rotation_matrix.reshape(1, 3, 3), num_gaussians, axis=0)
-        F_np = F_np_list[i]
-        # F_np = rotation_matrix
+        # F_np = F_np_list[i]
+        F_np = rotation_matrix
         new_gaussians_rotation = np.zeros((num_gaussians, 4))
         ti.init(arch = ti.gpu)
         @ti.kernel
@@ -130,7 +131,7 @@ if __name__ == "__main__":
         new_gaussians_rotation_ti.from_numpy(new_gaussians._rotation.cpu().detach().numpy())
         new_gaussians_features_rest_ti = ti.Matrix.ndarray(16, 3, ti.f32, shape=(num_gaussians))
         new_gaussians_features_rest_ti.from_numpy(torch.cat((new_gaussians._features_rest.cpu().detach(), torch.zeros(num_gaussians, 1, 3)), dim=1).numpy())
-        Do_Rotate(rotation_ti, new_gaussians_rotation_ti, new_gaussians_features_rest_ti)
+        # Do_Rotate(rotation_ti, new_gaussians_rotation_ti, new_gaussians_features_rest_ti)
         # print("new_gaussians_rotation_ti[0]: ", new_gaussians_rotation_ti[0])
         # print("quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())): ", quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())))
         # rotation_matrix_trans = quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())).to(dtype=torch.float32, device="cuda") @ (quaternion_to_rotation_matrix(new_gaussians._rotation[0]).T).to(dtype=torch.float32, device="cuda")

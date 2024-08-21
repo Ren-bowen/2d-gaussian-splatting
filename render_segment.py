@@ -57,19 +57,20 @@ if __name__ == "__main__":
     new_scaling = []
     new_rotation = []
 
-    p1 = np.array([-4.451480, 0.974875, 5.581665])
-    p2 = np.array([-1.992872, -0.037731, 6.155551])
-    p3 = np.array([-0.514574, 2.460062, 4.277073])
-    p4 = np.array([-2.974283, 3.445327, 3.594432])
+    p1 = np.array([-0.184466, 1.931121, 2.687635])
+    p2 = np.array([1.995424, 2.209363, 2.318887])
+    p3 = np.array([2.606919, -0.480207, 3.382995])
+    p4 = np.array([0.365852, -0.714891, 3.877035])
     mask = np.zeros(gaussians._xyz.shape[0])
     normal = np.cross(p2 - p1, p3 - p1)
     normal = normal / np.linalg.norm(normal)
     print("gaussians._features_dc.shape: ", gaussians._features_dc.shape)
     print("gaussians._features_rest.shape: ", gaussians._features_rest.shape)
+    m = -0.1
     for i in range(0, gaussians._xyz.shape[0]):
         p = gaussians._xyz[i, :].cpu().detach().numpy()
-        if (p - p1).dot(p2 - p1) > 0 and (p - p2).dot(p1 - p2) > 0 and (p - p3).dot(p4 - p3) > 0 and (p - p4).dot(p3 - p4) > 0 and (p - p2).dot(p3 - p2) > 0 and (p - p3).dot(p2 - p3) > 0 and (p - p1).dot(p4 - p1) > 0 and (p - p4).dot(p1 - p4) > 0:
-            if (np.abs((p - p1).dot(normal)) < 0.14):
+        if (p - p1).dot(p2 - p1) > m and (p - p2).dot(p1 - p2) > m and (p - p3).dot(p4 - p3) > m and (p - p4).dot(p3 - p4) > m and (p - p2).dot(p3 - p2) > m and (p - p3).dot(p2 - p3) > m and (p - p1).dot(p4 - p1) > m and (p - p4).dot(p1 - p4) > m:
+            if (np.abs((p - p1).dot(normal)) < 0.18):
                 new_xyz.append(gaussians._xyz[i, :])
                 new_features_dc.append(gaussians._features_dc[i, :, :])
                 new_features_rest.append(gaussians._features_rest[i, :, :])
@@ -77,8 +78,10 @@ if __name__ == "__main__":
                 new_scaling.append(gaussians._scaling[i, :])
                 new_rotation.append(gaussians._rotation[i, :])
                 mask[i] = 1
-    
-    np.save(r"C:\ren\code\2d-gaussian-splatting\output\input\regular", mask)
+    print("mask.sum(): ", mask.sum())
+    file_path = r"C:\ren\code\2d-gaussian-splatting\output\paper\iter_-2"
+    os.makedirs(file_path, exist_ok=True)
+    np.save(r"C:\ren\code\2d-gaussian-splatting\output\paper\iter_-2\mask.npy", mask)
     new_xyz = torch.stack(new_xyz, dim=0)
     new_features_dc = torch.stack(new_features_dc, dim=0)
     new_features_rest = torch.stack(new_features_rest, dim=0)
@@ -92,14 +95,6 @@ if __name__ == "__main__":
     new_scaling = new_scaling.to(dtype=torch.float32, device="cuda")
     new_rotation = new_rotation.to(dtype=torch.float32, device="cuda")
     
-    file_path = r"C:\ren\code\2d-gaussian-splatting\output\regular\iter_30000"
-    if not os.path.exists(file_path + "/new_gaussians_xyz.npy"):
-        np.save(file_path + "/new_gaussians_xyz.npy", gaussians._xyz.cpu().detach().numpy())
-    new_scaling = torch.cat([gaussians._scaling, torch.ones((gaussians._scaling.shape[0], 1), device="cuda")], dim=1)
-    if not os.path.exists(file_path + "/new_gaussians_scaling.npy"):
-        np.save(file_path + "/new_gaussians_scaling.npy", new_scaling.cpu().detach().numpy())
-    new_scaling = new_scaling[:, :2]
-    
     gaussians._xyz = new_xyz
     gaussians._features_dc = new_features_dc
     gaussians._features_rest = new_features_rest
@@ -109,3 +104,9 @@ if __name__ == "__main__":
     gaussians.active_sh_degree = gaussians.max_sh_degree
     scene.save(-2)
     
+    if not os.path.exists(file_path + "/new_gaussians_xyz.npy"):
+        np.save(file_path + "/new_gaussians_xyz.npy", gaussians._xyz.cpu().detach().numpy())
+    new_scaling = torch.cat([gaussians._scaling, torch.ones((gaussians._scaling.shape[0], 1), device="cuda")], dim=1)
+    if not os.path.exists(file_path + "/new_gaussians_scaling.npy"):
+        np.save(file_path + "/new_gaussians_scaling.npy", new_scaling.cpu().detach().numpy())
+    new_scaling = new_scaling[:, :2]
