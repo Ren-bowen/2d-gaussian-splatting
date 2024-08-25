@@ -72,10 +72,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        image, opacity, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["rend_alpha"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
         gt_image = viewpoint_cam.original_image.cuda()
+        gt_opacity = viewpoint_cam.gt_alpha_mask.cuda()
+        rgba = torch.cat([image, opacity], dim=0)
+        image = image * opacity
+        gt_image = gt_image * gt_opacity
         Ll1 = l1_loss(image, gt_image)
+        opacity_loss = l1_loss(opacity, gt_opacity) * 0.1
+        # for the conv loss, use the original rgb image
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
         # regularization
@@ -108,19 +114,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             bottom_mean_volume = torch.mean(volumes[sorted_indices[-top_k:]])
 
-        min_volum_ratio = 9.0
+        min_volum_ratio = 16.0
         Lvol_ratio = torch.max(top_mean_volume / bottom_mean_volume, torch.tensor(min_volum_ratio))-min_volum_ratio
         lambda_vol_ratio = 0.02
 
         regular_loss = lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         # loss
         # total_loss = loss + dist_loss + normal_loss + normal_loss1 * 3 + surface_loss * 3 + regular_loss
-        total_loss = loss + regular_loss + normal_loss
+        total_loss = loss + regular_loss + opacity_loss
         if (iteration % 100 == 0):
             
             print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
-            print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item())
+            print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item())
             # print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
         
         total_loss.backward()
@@ -199,6 +204,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         image_new, viewspace_point_tensor_new, visibility_filter_new, radii_new = render_pkg_new["render"], render_pkg_new["viewspace_points"], render_pkg_new["visibility_filter"], render_pkg_new["radii"]
 
                         gt_image = viewpoint_cam.original_image.cuda()
+                        gt_image = gt_image[:3, :, :]
                         Ll1 = l1_loss(image, gt_image)
                         Ll1_new = l1_loss(image_new, gt_image)
                         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
@@ -311,6 +317,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             pass
 
                         if iteration == testing_iterations[0]:
+                            gt_image = gt_image[:3, :, :]
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
 
                     l1_test += l1_loss(image, gt_image).mean().double()

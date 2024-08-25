@@ -7,10 +7,9 @@ import taichi as ti
 np_real = lambda x: np.array(x, dtype=np.float64).copy()
 np_integer = lambda x: np.array(x, dtype=np.int32).copy()
 
-def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_):
+def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_, file_path):
     # read vertices and faces form obj
     gmesh = np.zeros(gaussians_xyz_.shape[0])
-    file_path = r"C:\ren\code\2d-gaussian-splatting\output\regular\iter_30000"
     gmesh_file = file_path + "/gmesh.npy"
     os.makedirs(file_path, exist_ok=True)
     center_ = np.zeros((faces_.shape[0], 3))
@@ -19,6 +18,8 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_):
         for j in range(3):
             center_[i] += x_[faces_[i][j]] / 3
             center_last_[i] += x_last_[faces_[i][j]] / 3
+        center_[1] -= 0.16
+        center_last_[1] -= 0.16
     print("np.max(center_ - center_last_)", np.max(center_ - center_last_))
     ti.init(arch=ti.gpu)
     @ti.kernel
@@ -82,9 +83,6 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_):
                                  x_last:ti.types.ndarray(ndim=1), x:ti.types.ndarray(ndim=1), faces:ti.types.ndarray(ndim=1)):
         for i in range(num_gaussians):
             j = gmesh[i]
-            delta_center = (center[j] - center_last[j])
-            gaussians_xyz[i] += delta_center
-            
             normal_last = (x_last[faces[j][1]] - x_last[faces[j][0]]).cross(x_last[faces[j][2]] - x_last[faces[j][0]])
             normal_last /= normal_last.norm()
             normal = (x[faces[j][1]] - x[faces[j][0]]).cross(x[faces[j][2]] - x[faces[j][0]])
@@ -103,6 +101,7 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_):
             Fs[i] = F
             
             R, S = ti.polar_decompose(F)
+            gaussians_xyz[i] = R @ (gaussians_xyz[i] - center_last[j]) + center[j]
             '''
             rotations[i] = R
             gaussians_scaling[i] = S @ gaussians_scaling[i]
@@ -116,8 +115,8 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_):
     result_scaling = gaussians_scaling.to_numpy()
     return result_xyz, result_rotation, result_scaling
 
-if __name__ == "__main__":
-    gaussian_file_path = r"C:\ren\code\2d-gaussian-splatting\output\regular\iter_30000"
+def deform_gaussian(model_path, iteration):
+    gaussian_file_path = model_path + "/iter_{}".format(iteration)
     gaussian_xyz = np.load(gaussian_file_path + "/new_gaussians_xyz.npy")
     gaussian_scaling = np.load(gaussian_file_path + "/new_gaussians_scaling.npy")
     print("gaussian_xyz", gaussian_xyz.shape)
@@ -134,7 +133,7 @@ if __name__ == "__main__":
     points = o3d.geometry.PointCloud()
     points.points = o3d.utility.Vector3dVector(gaussian_xyz)
     o3d.io.write_point_cloud(gaussian_file_path + "/point_cloud/gaussian_xyz0.ply", points)
-    file_path = r"C:\Users\bowen ren\Downloads\sim_data"
+    file_path = gaussian_file_path + "/sim_data_new"
     mesh_origin = o3d.io.read_triangle_mesh(file_path + "/0.obj")
     position_origin = np_real(mesh_origin.vertices)
     # create a rotation matrix of 2 degree around z axis
@@ -155,13 +154,13 @@ if __name__ == "__main__":
         o3d.io.write_triangle_mesh(file_path + "/rot{}.obj".format(i), mesh)
     '''
     for i in range(0, frame_num - 5, 5):
-        mesh_last = o3d.io.read_triangle_mesh(file_path + "/rot{}.obj".format(i))
-        mesh = o3d.io.read_triangle_mesh(file_path + "/rot{}.obj".format(i + 5))
+        mesh_last = o3d.io.read_triangle_mesh(file_path + "/{}.obj".format(i))
+        mesh = o3d.io.read_triangle_mesh(file_path + "/{}.obj".format(i + 5))
         position_last = np_real(mesh_last.vertices)
         position = np_real(mesh.vertices)
         # position_last = position_list[i]
         # position = position_list[i + 1]
-        gaussians_xyz_new, F, gaussian_scaling_new = act_gaus(position_last, position, faces, gaussian_xyz, gaussian_scaling)
+        gaussians_xyz_new, F, gaussian_scaling_new = act_gaus(position_last, position, faces, gaussian_xyz, gaussian_scaling, gaussian_file_path)
         # print("np.max(gaussians_xyz_new - gaussian_xyz)", np.max(gaussians_xyz_new - gaussian_xyz))
         gaussian_xyz = gaussians_xyz_new
         gaussian_scaling = gaussian_scaling_new
@@ -174,6 +173,6 @@ if __name__ == "__main__":
         gaussians_scaling_list.append(copy.deepcopy(gaussian_scaling_new))
 
         print("frame " + str(i) + " done")
-    np.save(os.path.join(gaussian_file_path, "gaussian_xyz_list_rot.npy"), gaussians_xyz_list)
+    np.save(os.path.join(gaussian_file_path, "gaussian_xyz_list_rot_new.npy"), gaussians_xyz_list)
     np.save(os.path.join(gaussian_file_path, "rotation_list_rot.npy"), gaussians_rotation_list)
     np.save(os.path.join(gaussian_file_path, "gaussian_scaling_list_rot.npy"), gaussians_scaling_list)
