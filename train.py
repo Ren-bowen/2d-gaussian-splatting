@@ -11,22 +11,105 @@
 
 import os
 import torch
+import trimesh
 from random import randint
 from utils.loss_utils import l1_loss, ssim, surfel_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
+from utils.mesh_utils import post_process_mesh
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from render import GaussianExtractor
+from gaussian_renderer import render
+import torch.nn.functional as F
+import open3d as o3d
+from pytorch3d.structures import Pointclouds, Meshes
+from pytorch3d.loss import point_mesh_face_distance
+import numpy as np
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+
+def point_to_triangle_distance(points, triangles):
+    N = points.shape[0]
+    M = triangles.shape[0]
+    # points: (N, 3)
+    # triangles: (M, 3, 3)
+
+    # 将点扩展到与三角形匹配的形状 (N, 1, 3)
+    p = points[:, None, :]  # (N, 1, 3)
+    
+    # 拆分三角形顶点
+    v0 = triangles[:, 0, :]  # (M, 3)
+    v1 = triangles[:, 1, :]  # (M, 3)
+    v2 = triangles[:, 2, :]  # (M, 3)
+
+    # 计算边向量
+    edge0 = v1 - v0  # (M, 3)
+    edge1 = v2 - v0  # (M, 3)
+    
+    # 计算法向量和平面的垂直距离
+    normal = torch.cross(edge0, edge1, dim=1)  # (M, 3)
+    normal_norm = torch.norm(normal, dim=1, keepdim=True)  # (M, 1)
+    
+    # 计算每个点到每个三角形平面的距离
+    # 这里需要扩展 normal 的第一个维度，以匹配 p 和 v0_to_p 的形状
+    normal_expanded = normal.unsqueeze(0).expand(N, M, 3)  # (N, M, 3)
+    normal_norm_expanded = normal_norm.unsqueeze(0).expand(N, M, 1)  # (N, M, 1)
+
+    v0_to_p = p - v0[None, :, :]  # (N, M, 3)
+    distance_to_plane = torch.abs(torch.sum(v0_to_p * normal_expanded, dim=2) / normal_norm_expanded.squeeze(2))  # (N, M)
+    
+    # 投影点到平面上
+    projection = p - distance_to_plane[..., None] * (normal[None, :, :] / normal_norm)  # (N, M, 3)
+
+    # 判断投影点是否在三角形内
+    def is_point_in_triangle(pt, v0, v1, v2):
+        edge0 = v1 - v0
+        edge1 = v2 - v0
+        v0_to_pt = pt - v0
+
+        c0 = torch.cross(edge0, v0_to_pt, dim=2)
+        c1 = torch.cross(v2 - v1, pt - v1, dim=2)
+        c2 = torch.cross(v0 - v2, pt - v2, dim=2)
+
+        inside = (torch.sum(c0 * c1, dim=2) >= 0) & (torch.sum(c0 * c2, dim=2) >= 0)
+        return inside
+
+    # 检查投影点是否在三角形内
+    inside_triangle = is_point_in_triangle(projection, v0[None, :, :], v1[None, :, :], v2[None, :, :])  # (N, M)
+    
+    # 如果在三角形内，距离就是垂直距离
+    distances = torch.where(inside_triangle, distance_to_plane, torch.full_like(distance_to_plane, float('inf')))  # (N, M)
+
+    # 如果不在三角形内，计算点到三角形边的最小距离
+    def point_to_edge_distance(pt, v0, v1):
+        edge = v1 - v0  # (M, 3)
+        t = torch.sum((pt - v0) * edge, dim=2) / torch.sum(edge * edge, dim=1)  # (N, M)
+        t = torch.clamp(t, 0, 1)  # (N, M)
+        closest_point = v0[None, :, :] + t[..., None] * edge[None, :, :]  # (N, M, 3)
+        return torch.norm(pt - closest_point, dim=2)  # (N, M)
+
+    dist_to_edge0 = point_to_edge_distance(p, v0, v1)
+    dist_to_edge1 = point_to_edge_distance(p, v1, v2)
+    dist_to_edge2 = point_to_edge_distance(p, v2, v0)
+    
+    edge_distances = torch.min(torch.stack([dist_to_edge0, dist_to_edge1, dist_to_edge2], dim=2), dim=2).values  # (N, M)
+
+    # 最终距离是垂直距离和边距离的最小值
+    final_distances = torch.min(distances, edge_distances)  # (N, M)
+    
+    # 对每个点，找到最近的三角形距离
+    min_distances = torch.min(final_distances, dim=1).values  # (N,)
+    
+    return min_distances
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
     first_iter = 0
@@ -91,6 +174,32 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         rend_dist = render_pkg["rend_dist"]
         rend_normal  = render_pkg['rend_normal']
         surf_normal = render_pkg['surf_normal']
+
+        # 预计算 surf_normal 的内积
+        surf_normal_pad = F.pad(surf_normal, (2, 2, 2, 2))  # 填充以便处理边界条件
+        normal_diff = torch.zeros(1, dtype=surf_normal.dtype, device=surf_normal.device)  # 初始化 normal_diff
+
+        # 生成相邻像素的位移
+        offsets = torch.tensor([(k, l) for k in range(-2, 3) for l in range(-2, 3)], device=surf_normal.device)
+
+        # 遍历所有位移，计算对应的内积并累积 normal_diff
+        '''
+        for offset in offsets:
+            k, l = offset
+            # 获取位移后的surf_normal
+            shifted_surf_normal = surf_normal_pad[:, 2+k:2+k+surf_normal.shape[1], 2+l:2+l+surf_normal.shape[2]]
+            
+            # 计算点积并累积
+            dot_product = (surf_normal * shifted_surf_normal).sum(dim=0)
+            
+            # 对gt_opacity进行掩码操作
+            # mask = (gt_opacity[0] > 0.5) & (F.pad(gt_opacity[0], (2, 2, 2, 2))[2+k:2+k+surf_normal.shape[1], 2+l:2+l+surf_normal.shape[2]] > 0.5)
+            
+            normal_diff += (1 - dot_product[mask]).sum()
+
+        # 最终 normal_diff 结果
+        normal_diff = normal_diff / (surf_normal.shape[1] * surf_normal.shape[2])
+        '''     
         normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
         normal_loss = lambda_normal * (normal_error).mean()
         dist_loss = lambda_dist * (rend_dist).mean()
@@ -108,8 +217,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         n = len(volumes)
         top_k = int(n * alpha)
 
+        # planar loss
+        if (iteration >= 7000):
+            if (iteration % 1000 == 0):
+                gaussExtractor = GaussianExtractor(gaussians, render, pipe, bg_color=bg_color) 
+                gaussExtractor.gaussians.active_sh_degree = 0
+                gaussExtractor.reconstruction(scene.getTrainCameras())
+                depth_trunc = gaussExtractor.radius * 2.0
+                voxel_size = depth_trunc / 128
+                sdf_trunc = 5.0 * voxel_size
+                mesh = gaussExtractor.extract_mesh_bounded(voxel_size=voxel_size, sdf_trunc=sdf_trunc, depth_trunc=depth_trunc)
+                mesh_post = post_process_mesh(mesh, cluster_to_keep=1)
+                o3d.io.write_triangle_mesh(scene.model_path + "/mesh_{:04d}.ply".format(iteration), mesh_post)
+                mesh_vertices = torch.tensor(mesh_post.vertices, dtype=torch.float32, device="cuda")
+                mesh_faces = torch.tensor(mesh_post.triangles, dtype=torch.int64, device="cuda")
+                
+            # Compute distance of each Gaussian to the mesh as planar loss
+            triangles = mesh_vertices[mesh_faces]
+            # distances = torch.tensor(point_mesh_face_distance(mesh, triangles), dtype=torch.float32, device="cuda")
+            distances = point_to_triangle_distance(gaussians.get_xyz, triangles)
+            planar_loss = torch.mean(torch.abs(distances)) * 10
+        else:
+            planar_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
         # surface_loss = surfel_loss(gaussians.get_covariance().squeeze())
-        # surface_loss = 0
         top_mean_volume = torch.mean(volumes[sorted_indices[:top_k]])
         with torch.no_grad():
             bottom_mean_volume = torch.mean(volumes[sorted_indices[-top_k:]])
@@ -118,14 +248,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Lvol_ratio = torch.max(top_mean_volume / bottom_mean_volume, torch.tensor(min_volum_ratio))-min_volum_ratio
         lambda_vol_ratio = 0.02
 
+        plane_vector = torch.tensor([-0.0028569559637713245, -0.8715965537089316, -0.490216], device='cuda')
+        mesh_distance = torch.matmul(gaussians.get_xyz, plane_vector) + 1.5171937252269088
+        mesh_loss = torch.mean(mesh_distance) * 10
         regular_loss = lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
-        # loss
+
         # total_loss = loss + dist_loss + normal_loss + normal_loss1 * 3 + surface_loss * 3 + regular_loss
-        total_loss = loss + regular_loss + opacity_loss
+        # normal_diff = torch.tensor(normal_diff, dtype=torch.float32, device="cuda") * 0.1
+        total_loss = loss + regular_loss + dist_loss + normal_loss + opacity_loss + planar_loss
         if (iteration % 100 == 0):
             
             print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
-            print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item())
+            print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item(), "mesh_loss: ", mesh_loss.item(), "planar_loss: ", planar_loss.item())
+            # print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item(), "normal_diff: ", normal_diff.item())
             # print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
         
         total_loss.backward()
@@ -249,7 +384,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # raise e
                     network_gui.conn = None
 
-def prepare_output_and_logger(args):    
+def prepare_output_and_logger(args):     
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
@@ -341,8 +476,8 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 15_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 15_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 8000, 15_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 3_000, 7_000, 8000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)

@@ -34,6 +34,25 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_, file_path)
                     min_dis = dis
                     min_idx = j
             gmesh[i] = min_idx
+
+    @ti.kernel
+    def translate_mesh(x:ti.types.ndarray(ndim=1), faces:ti.types.ndarray(ndim=1), result_top:ti.types.ndarray(ndim=1), result_bottom:ti.types.ndarray(ndim=1)):
+        mean_length = 0.
+        for i in range(faces.shape[0]):
+            for j in range(3):
+                mean_length += (x[faces[i][j]] - x[faces[i][(j + 1)%3]]).norm()
+        mean_length /= faces.shape[0] * 3
+        for i in range(x.shape[0]):
+            normal = ti.Vector.zero(ti.f32, 3)
+            for j in range(faces.shape[0]):
+                for k in range(3):
+                    if faces[j][k] == i:
+                        normal += (x[faces[j][(k + 1)%3]] - x[faces[j][k]]).cross(x[faces[j][(k + 2)%3]] - x[faces[j][k]])
+            normal /= normal.norm()
+            result_top[i] = x[i] + 0.5 * mean_length * normal
+            result_bottom[i] = x[i] - 0.5 * mean_length * normal
+        
+    # if True:                
     if not os.path.isfile(gmesh_file):
         '''
         for i in range(gaussians_xyz_.shape[0]):
@@ -51,6 +70,21 @@ def act_gaus(x_last_, x_, faces_, gaussians_xyz_, gaussians_scaling_, file_path)
         gmesh_ti = ti.ndarray(ti.i32, shape=(gaussians_xyz_.shape[0]))
         gaussians_xyz_ti.from_numpy(gaussians_xyz_)
         center_last_ti.from_numpy(center_last_)
+        x_last = ti.Vector.ndarray(3, ti.f32, shape=(x_last_.shape[0]))
+        faces = ti.Vector.ndarray(3, ti.i32, shape=(faces_.shape[0]))
+        x_last.from_numpy(x_last_)
+        faces.from_numpy(faces_)
+        x_top = ti.Vector.ndarray(3, ti.f32, shape=(x_last_.shape[0]))
+        x_bottom = ti.Vector.ndarray(3, ti.f32, shape=(x_last_.shape[0]))
+        mesh_top = o3d.geometry.TriangleMesh()
+        mesh_bottom = o3d.geometry.TriangleMesh()
+        translate_mesh(x_last, faces, x_top, x_bottom)
+        mesh_top.vertices = o3d.utility.Vector3dVector(x_top.to_numpy())
+        mesh_top.triangles = o3d.utility.Vector3iVector(faces_.copy())
+        mesh_bottom.vertices = o3d.utility.Vector3dVector(x_bottom.to_numpy())
+        mesh_bottom.triangles = o3d.utility.Vector3iVector(faces_.copy())
+        o3d.io.write_triangle_mesh(file_path + "/top.obj", mesh_top)
+        o3d.io.write_triangle_mesh(file_path + "/bottom.obj", mesh_bottom)
         create_gmesh(gaussians_xyz_ti, center_last_ti, gmesh_ti)
         gmesh = gmesh_ti.to_numpy()
         np.save(gmesh_file, gmesh)
@@ -133,8 +167,8 @@ def deform_gaussian(model_path, iteration):
     points = o3d.geometry.PointCloud()
     points.points = o3d.utility.Vector3dVector(gaussian_xyz)
     o3d.io.write_point_cloud(gaussian_file_path + "/point_cloud/gaussian_xyz0.ply", points)
-    file_path = gaussian_file_path + "/sim_data_new"
-    mesh_origin = o3d.io.read_triangle_mesh(file_path + "/0.obj")
+    file_path = gaussian_file_path + "/sim_data"
+    mesh_origin = o3d.io.read_triangle_mesh(file_path + "/origin_mesh.obj")
     position_origin = np_real(mesh_origin.vertices)
     # create a rotation matrix of 2 degree around z axis
     R = np.array([[np.cos(2 * np.pi / 180), -np.sin(2 * np.pi / 180), 0],
@@ -154,16 +188,18 @@ def deform_gaussian(model_path, iteration):
         o3d.io.write_triangle_mesh(file_path + "/rot{}.obj".format(i), mesh)
     '''
     for i in range(0, frame_num - 5, 5):
+        mesh_origin = o3d.io.read_triangle_mesh(file_path + "/origin_mesh.obj")
         mesh_last = o3d.io.read_triangle_mesh(file_path + "/{}.obj".format(i))
         mesh = o3d.io.read_triangle_mesh(file_path + "/{}.obj".format(i + 5))
-        position_last = np_real(mesh_last.vertices)
+        position_origin = np_real(mesh_origin.vertices)
+        # position_last = np_real(mesh_last.vertices)
         position = np_real(mesh.vertices)
         # position_last = position_list[i]
         # position = position_list[i + 1]
-        gaussians_xyz_new, F, gaussian_scaling_new = act_gaus(position_last, position, faces, gaussian_xyz, gaussian_scaling, gaussian_file_path)
+        gaussians_xyz_new, F, gaussian_scaling_new = act_gaus(position_origin, position, faces, gaussian_xyz, gaussian_scaling, gaussian_file_path)
         # print("np.max(gaussians_xyz_new - gaussian_xyz)", np.max(gaussians_xyz_new - gaussian_xyz))
-        gaussian_xyz = gaussians_xyz_new
-        gaussian_scaling = gaussian_scaling_new
+        # gaussian_xyz = gaussians_xyz_new
+        # gaussian_scaling = gaussian_scaling_new
         # save new_gaussians_xyz as obj file of point cloud
         points = o3d.geometry.PointCloud()
         points.points = o3d.utility.Vector3dVector(gaussians_xyz_new)

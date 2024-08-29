@@ -65,7 +65,6 @@ if __name__ == "__main__":
     print("iteration: ", iteration)
     scene = Scene(dataset, new_gaussians, load_iteration=iteration, shuffle=False)
 
-    deform_gaussian(args.model_path, iteration)
     file_path = os.path.join(args.model_path, 'iter_{}'.format(iteration))
     os.makedirs(file_path, exist_ok=True)
     if not os.path.exists(file_path + "/new_gaussians_xyz.npy"):
@@ -74,6 +73,7 @@ if __name__ == "__main__":
     if not os.path.exists(file_path + "/new_gaussians_scaling.npy"):
         np.save(file_path + "/new_gaussians_scaling.npy", new_scaling.cpu().detach().numpy())
     print("new_gaussians._xyz.shape: ", new_gaussians._xyz.shape)
+    deform_gaussian(args.model_path, iteration)
     bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
     # bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -82,6 +82,10 @@ if __name__ == "__main__":
     new_gaussians_scaling_np_list = np.load(os.path.join(file_path, "gaussian_scaling_list_rot.npy"))
     mean_xyz = torch.mean(new_gaussians._xyz, axis=0)
     num_gaussians = new_gaussians._xyz.shape[0]
+    origin_rotation = new_gaussians._rotation
+    origin_scaling = new_gaussians._scaling
+    origin_xyz = new_gaussians._xyz
+    origin_features_rest = new_gaussians._features_rest
     
     for i in range(0, 40, 1):
         print("i: ", i)
@@ -115,16 +119,16 @@ if __name__ == "__main__":
         new_gaussians_rotation_ti = ti.Vector.ndarray(4, ti.f32, shape=(num_gaussians))
         new_gaussians_scaling_ti = ti.Vector.ndarray(2, ti.f32, shape=(num_gaussians))
         new_gaussians_RS_ti = ti.Matrix.ndarray(3, 3, ti.f32, shape=(num_gaussians))
-        new_gaussians_RS_ti.from_numpy(build_scaling_rotation(torch.cat([new_gaussians._scaling, torch.ones_like(new_gaussians._scaling)], dim=-1), new_gaussians._rotation).cpu().detach().numpy())
+        new_gaussians_RS_ti.from_numpy(build_scaling_rotation(torch.cat([origin_scaling, torch.ones_like(new_gaussians._scaling)], dim=-1), origin_rotation).cpu().detach().numpy())
         new_gaussians_features_rest_ti = ti.Matrix.ndarray(16, 3, ti.f32, shape=(num_gaussians))
-        new_gaussians_features_rest_ti.from_numpy(torch.cat((new_gaussians._features_rest.cpu().detach(), torch.zeros(num_gaussians, 1, 3)), dim=1).numpy())
+        new_gaussians_features_rest_ti.from_numpy(torch.cat((origin_features_rest.cpu().detach(), torch.zeros(num_gaussians, 1, 3)), dim=1).numpy())
         Do_Rotate(F_ti, new_gaussians_RS_ti, new_gaussians_features_rest_ti, new_gaussians_rotation_ti, new_gaussians_scaling_ti)
         # print("new_gaussians_rotation_ti[0]: ", new_gaussians_rotation_ti[0])
         # print("quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())): ", quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())))
         # rotation_matrix_trans = quaternion_to_rotation_matrix(torch.from_numpy(new_gaussians_rotation_ti[0].to_numpy())).to(dtype=torch.float32, device="cuda") @ (quaternion_to_rotation_matrix(new_gaussians._rotation[0]).T).to(dtype=torch.float32, device="cuda")
         # print("rotation_matrix_trans: ", rotation_matrix_trans)
         new_gaussians._rotation = torch.from_numpy(new_gaussians_rotation_ti.to_numpy()).to(dtype=torch.float32, device="cuda")
-        # new_gaussians._features_rest = torch.from_numpy(new_gaussians_features_rest_ti.to_numpy()).to(dtype=torch.float32, device="cuda")[:, :15, :]
+        new_gaussians._features_rest = torch.from_numpy(new_gaussians_features_rest_ti.to_numpy()).to(dtype=torch.float32, device="cuda")[:, :15, :]
         print("new_gaussians.scaling: ", new_gaussians._scaling.shape)
         print("new_gaussians.scaling[0]: ", new_gaussians._scaling[0])
         new_gaussians._scaling = torch.from_numpy(new_gaussians_scaling_ti.to_numpy()).to(dtype=torch.float32, device="cuda")
@@ -183,4 +187,3 @@ if __name__ == "__main__":
             mesh_post = post_process_mesh(mesh, cluster_to_keep=args.num_cluster)
             o3d.io.write_triangle_mesh(os.path.join(train_dir, name.replace('.ply', '_post.ply')), mesh_post)
             print("mesh post processed saved at {}".format(os.path.join(train_dir, name.replace('.ply', '_post.ply'))))
-        
