@@ -101,6 +101,24 @@ def rotation_matrix_to_quaternion(R):
             qz = 0.25 * s
     return ti.Vector([qw, qx, qy, qz])
 
+@ti.func
+def quaternion_to_rotation_matrix(q):
+    w, x, y, z = q
+    xx = 2.0 * x * x
+    yy = 2.0 * y * y
+    zz = 2.0 * z * z
+    xy = 2.0 * x * y
+    xz = 2.0 * x * z
+    yz = 2.0 * y * z
+    wx = 2.0 * w * x
+    wy = 2.0 * w * y
+    wz = 2.0 * w * z
+    return ti.Matrix([
+        [1.0 - yy - zz, xy + wz, xz - wy],
+        [xy - wz, 1.0 - xx - zz, yz + wx],
+        [xz + wy, yz - wx, 1.0 - xx - yy]
+    ])
+
 # 常数
 kSqrt03_02 = np.sqrt(3.0 / 2.0)
 kSqrt01_03 = np.sqrt(1.0 / 3.0)
