@@ -139,6 +139,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    loss_list = []
+    planar_loss_list = []
+    mesh_loss_list = []
+
     for iteration in range(first_iter, opt.iterations + 1):        
 
         iter_start.record()
@@ -218,7 +222,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         top_k = int(n * alpha)
 
         # planar loss
-        if (iteration >= 7000):
+        lambda_planar = 10
+        if (iteration >= 29000): 
             if (iteration % 1000 == 0):
                 gaussExtractor = GaussianExtractor(gaussians, render, pipe, bg_color=bg_color) 
                 gaussExtractor.gaussians.active_sh_degree = 0
@@ -236,7 +241,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             triangles = mesh_vertices[mesh_faces]
             # distances = torch.tensor(point_mesh_face_distance(mesh, triangles), dtype=torch.float32, device="cuda")
             distances = point_to_triangle_distance(gaussians.get_xyz, triangles)
-            planar_loss = torch.mean(torch.abs(distances)) * 10
+            planar_loss = torch.mean(torch.abs(distances)) * lambda_planar
         else:
             planar_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
         # surface_loss = surfel_loss(gaussians.get_covariance().squeeze())
@@ -250,16 +255,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         plane_vector = torch.tensor([-0.0028569559637713245, -0.8715965537089316, -0.490216], device='cuda')
         mesh_distance = torch.matmul(gaussians.get_xyz, plane_vector) + 1.5171937252269088
-        mesh_loss = torch.mean(mesh_distance) * 10
+        mesh_loss = torch.mean(torch.abs(mesh_distance)) * 10
         regular_loss = lambda_aniso * Laniso+ lambda_vol_ratio * Lvol_ratio
 
         # total_loss = loss + dist_loss + normal_loss + normal_loss1 * 3 + surface_loss * 3 + regular_loss
         # normal_diff = torch.tensor(normal_diff, dtype=torch.float32, device="cuda") * 0.1
         total_loss = loss + regular_loss + dist_loss + normal_loss + opacity_loss + planar_loss
-        if (iteration % 100 == 0):
+        if (iteration % 20 == 0):
             
             print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
             print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item(), "mesh_loss: ", mesh_loss.item(), "planar_loss: ", planar_loss.item())
+            loss_list.append(loss.item())
+            planar_loss_list.append(planar_loss.item())
+            mesh_loss_list.append(mesh_loss.item())
             # print("Ll1: ", Ll1.item(), "1 - ssim: ", 1 - ssim(image, gt_image).item(), "opacity_loss: ", opacity_loss.item(), "normal_diff: ", normal_diff.item())
             # print("iter: ", iteration, "loss: ", loss.item(), "dist_loss: ", dist_loss.item(), "normal_loss: ", normal_loss.item(), "regular_loss: ", regular_loss.item())
         
@@ -384,6 +392,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # raise e
                     network_gui.conn = None
 
+    # save loss lists
+    np.save(scene.model_path + "/loss_list_{}.npy".format(lambda_planar), np.array(loss_list))
+    np.save(scene.model_path + "/planar_loss_list{}.npy".format(lambda_planar), np.array(planar_loss_list))
+    np.save(scene.model_path + "/mesh_loss_list{}.npy".format(lambda_planar), np.array(mesh_loss_list))
 def prepare_output_and_logger(args):     
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
